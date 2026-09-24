@@ -85,8 +85,10 @@ export default function Home() {
       setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result });
     } catch (error) {
       if (version !== requestVersion.current) return;
-      let message = "Не удалось завершить проверку. Повторите попытку.";
-      // Only our explicit messages are suitable for the UI; parsing failures stay generic.
+      let message = "В приложении произошла ошибка при обработке проверки. Повторите попытку.";
+      if (error instanceof TypeError && stage === "sending") {
+        message = "Не удалось подключиться к серверу проверки. Проверьте соединение или попробуйте позже.";
+      }
       if (error instanceof AnalysisRequestError) message = error.message;
       setAnalysis({ status: "error", stage, message });
     }

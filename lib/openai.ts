@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { Response } from "openai/resources/responses/responses";
+import { AnalysisError } from "@/lib/analysis-errors";
 import { fetchPublicSources } from "@/lib/source-fetch";
 import type { PublicSource } from "@/lib/source-fetch";
 import { scoreLead } from "@/lib/scoring";
@@ -8,8 +9,6 @@ import { analysisResultSchema } from "@/lib/schemas";
 import { buildVerificationReport, modelEvidenceSchema } from "@/lib/verification";
 import type { AnalysisStage, Lead } from "@/lib/schemas";
 import type { AnalysisResult } from "@/lib/schemas";
-
-export class InvalidAnalysisError extends Error {}
 
 function normalizeUrl(value: string): string | null {
   try {
@@ -85,14 +84,15 @@ async function extractEvidence(client: OpenAI, lead: Lead, sources: PublicSource
   }, { signal });
   if (response.status !== "completed" || !response.output_parsed) {
     console.error("Evidence response incomplete", { status: response.status, reason: response.incomplete_details?.reason });
-    throw new InvalidAnalysisError("Некорректный ответ анализа доказательств.");
+    throw new AnalysisError("EVIDENCE_FAILED");
   }
   const parsed = modelEvidenceSchema.safeParse(response.output_parsed);
-  if (!parsed.success) throw new InvalidAnalysisError("Некорректная структура доказательств.");
+  if (!parsed.success) throw new AnalysisError("EVIDENCE_FAILED");
   return parsed.data.evidence;
 }
 
 export async function analyzeLead(lead: Lead, onProgress: (stage: AnalysisStage) => void, signal: AbortSignal): Promise<AnalysisResult> {
+  if (!process.env.OPENAI_API_KEY?.trim()) throw new AnalysisError("API_KEY_MISSING");
   const client = new OpenAI({ timeout: 40_000, maxRetries: 0 });
   onProgress("searching");
   const search = await client.responses.create({
@@ -110,10 +110,11 @@ export async function analyzeLead(lead: Lead, onProgress: (stage: AnalysisStage)
       reason: search.incomplete_details?.reason,
       toolStatuses: search.output.filter((item) => item.type === "web_search_call").map((item) => item.status),
     });
-    throw new InvalidAnalysisError("Поиск источников не выполнен.");
+    throw new AnalysisError("SEARCH_FAILED");
   }
   onProgress("fetching");
   const fetched = await fetchPublicSources(selectSearchSources(search, lead), signal);
+  signal.throwIfAborted();
   const sources = fetched.flatMap((item) => item.source ? [item.source] : []);
   const unavailable = fetched.filter((item) => item.unavailable).map((item) => item.url);
   let evidence: Awaited<ReturnType<typeof extractEvidence>> = [];
@@ -123,6 +124,7 @@ export async function analyzeLead(lead: Lead, onProgress: (stage: AnalysisStage)
   const report = buildVerificationReport(lead, sources, unavailable, evidence);
   onProgress("scoring");
   const result = analysisResultSchema.safeParse({ ...report, assessment: scoreLead(report) });
-  if (!result.success) throw new InvalidAnalysisError("Некорректный результат анализа.");
+  signal.throwIfAborted();
+  if (!result.success) throw new AnalysisError("RESULT_INVALID");
   return result.data;
 }

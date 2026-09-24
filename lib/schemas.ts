@@ -48,7 +48,12 @@ export const analyzeResponseSchema = z.discriminatedUnion("status", [
   }),
   z.object({
     status: z.literal("error"),
-    code: z.enum(["INVALID_JSON", "INVALID_INPUT", "OPENAI_ERROR", "AI_INVALID_RESULT"]),
+    code: z.enum([
+      "INVALID_JSON", "INVALID_INPUT", "API_KEY_MISSING", "API_KEY_INVALID", "API_ACCESS_DENIED",
+      "API_CREDITS_EXHAUSTED", "API_SPEND_LIMIT", "API_USAGE_LIMIT", "API_RATE_LIMIT", "API_LIMIT_UNKNOWN", "API_CONNECTION_FAILED",
+      "API_TIMEOUT", "CHECK_TIMEOUT", "API_UNAVAILABLE", "API_REQUEST_INVALID", "SEARCH_FAILED", "EVIDENCE_FAILED",
+      "RESULT_INVALID", "API_ERROR", "SERVER_ERROR",
+    ]),
     message: z.string(),
   }),
 ]);

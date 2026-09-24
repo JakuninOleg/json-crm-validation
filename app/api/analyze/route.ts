@@ -1,6 +1,7 @@
-import { analyzeLead, InvalidAnalysisError } from "@/lib/openai";
+import { describeAnalysisError } from "@/lib/analysis-errors";
+import { analyzeLead } from "@/lib/openai";
 import { describeLeadIssue, leadSchema } from "@/lib/schemas";
-import type { AnalysisEvent } from "@/lib/schemas";
+import type { AnalysisEvent, AnalysisStage } from "@/lib/schemas";
 
 export const maxDuration = 120;
 
@@ -32,17 +33,24 @@ export async function POST(request: Request) {
   }
 
   const abortController = new AbortController();
-  const signal = AbortSignal.any([request.signal, abortController.signal, AbortSignal.timeout(110_000)]);
+  const timeoutSignal = AbortSignal.timeout(110_000);
+  const signal = AbortSignal.any([request.signal, abortController.signal, timeoutSignal]);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      let stage: AnalysisStage = "accepted";
       function send(event: AnalysisEvent) {
-        if (!signal.aborted) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        if (!request.signal.aborted && !abortController.signal.aborted) {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        }
       }
 
       try {
         send({ status: "progress", stage: "accepted" });
-        const result = await analyzeLead(lead.data, (stage) => send({ status: "progress", stage }), signal);
+        const result = await analyzeLead(lead.data, (nextStage) => {
+          stage = nextStage;
+          send({ status: "progress", stage });
+        }, signal);
         send({ status: "verified", lead_id: lead.data.lead_id, result });
       } catch (error) {
         // Log only diagnostic fields. Provider messages may contain request data.
@@ -50,17 +58,10 @@ export async function POST(request: Request) {
           ? error.status
           : undefined;
         if (error instanceof Error) {
-          console.error("Lead analysis failed", { type: error.name, providerStatus });
+          console.error("Lead analysis failed", { stage, type: error.name, providerStatus });
         }
-        let code: "AI_INVALID_RESULT" | "OPENAI_ERROR" = "OPENAI_ERROR";
-        let message = providerStatus === 429
-          ? "Лимит OpenAI API временно исчерпан. Попробуйте позже."
-          : "Сервис анализа временно недоступен. Повторите попытку позже.";
-        if (error instanceof InvalidAnalysisError) {
-          code = "AI_INVALID_RESULT";
-          message = "Не удалось получить достоверный результат анализа.";
-        }
-        send({ status: "error", code, message });
+        const failure = describeAnalysisError(error, timeoutSignal.aborted, stage);
+        send({ status: "error", ...failure });
       } finally {
         if (!abortController.signal.aborted) controller.close();
       }
