@@ -1,9 +1,9 @@
 type ProcessStatusProps = {
   isValid: boolean;
-  isPrepared: boolean;
+  requestState: "idle" | "sending" | "validated" | "error";
 };
 
-export function ProcessStatus({ isValid, isPrepared }: ProcessStatusProps) {
+export function ProcessStatus({ isValid, requestState }: ProcessStatusProps) {
   return (
     <section className="overflow-hidden rounded-xl border border-[#dfe3e9] bg-white shadow-[0_1px_2px_rgba(20,26,40,0.04)]">
       <div className="border-b border-[#e7e9ee] px-5 py-4">
@@ -22,12 +22,18 @@ export function ProcessStatus({ isValid, isPrepared }: ProcessStatusProps) {
             </div>
           </li>
           <li className="flex items-start gap-3">
-            <span className={`flex size-5 shrink-0 items-center justify-center rounded-full text-xs ${isPrepared ? "bg-emerald-100 text-emerald-800" : "bg-[#edf0f4] text-[#8c96a5]"}`}>
-              {isPrepared ? "✓" : "2"}
+            <span className={`flex size-5 shrink-0 items-center justify-center rounded-full text-xs ${requestState === "validated" ? "bg-emerald-100 text-emerald-800" : requestState === "sending" ? "bg-blue-100 text-blue-800" : "bg-[#edf0f4] text-[#8c96a5]"}`}>
+              {requestState === "validated" ? "✓" : "2"}
             </span>
             <div>
-              <p className="font-medium text-[#303846]">Лид подготовлен</p>
-              <p className="mt-0.5 text-[#8a93a1]">Готов к серверной проверке</p>
+              <p className="font-medium text-[#303846]">Данные отправлены</p>
+              <p className="mt-0.5 text-[#8a93a1]">
+                {requestState === "validated"
+                  ? "Сервер проверил формат лида"
+                  : requestState === "sending"
+                    ? "Ожидаем ответ сервера"
+                    : "После нажатия «Проверить лид»"}
+              </p>
             </div>
           </li>
           <li className="flex items-start gap-3">

@@ -1,19 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { JsonInput } from "@/components/JsonInput";
 import { ProcessStatus } from "@/components/ProcessStatus";
 import { exampleLead } from "@/lib/example-lead";
-import { validateLeadJson } from "@/lib/schemas";
+import { analyzeResponseSchema, validateLeadJson } from "@/lib/schemas";
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [isPrepared, setIsPrepared] = useState(false);
+  const [requestState, setRequestState] = useState<"idle" | "sending" | "validated" | "error">("idle");
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
   const validation = useMemo(() => validateLeadJson(input), [input]);
 
   function updateInput(value: string) {
+    requestVersion.current += 1;
     setInput(value);
-    setIsPrepared(false);
+    setRequestState("idle");
+    setRequestError(null);
   }
 
   function formatInput() {
@@ -21,6 +25,33 @@ export default function Home() {
       updateInput(JSON.stringify(JSON.parse(input), null, 2));
     } catch {
       // The validation message beside the editor explains the syntax error.
+    }
+  }
+
+  async function analyzeLead() {
+    if (validation.status !== "valid") return;
+
+    const version = ++requestVersion.current;
+    setRequestState("sending");
+    setRequestError(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(validation.lead),
+      });
+      const data = analyzeResponseSchema.safeParse(await response.json());
+
+      if (version !== requestVersion.current) return;
+      if (!data.success) throw new Error("Некорректный ответ сервера.");
+      if (data.data.status === "error") throw new Error(data.data.message);
+
+      setRequestState("validated");
+    } catch (error) {
+      if (version !== requestVersion.current) return;
+      setRequestState("error");
+      setRequestError(error instanceof Error ? error.message : "Не удалось проверить лид. Повторите попытку.");
     }
   }
 
@@ -38,7 +69,7 @@ export default function Home() {
               Вставьте JSON заявки, чтобы проверить формат данных перед анализом.
             </p>
           </div>
-          <span className="rounded-md border border-[#d9dee6] bg-white px-3 py-1.5 font-mono text-xs text-[#687384]">Демо · этап 1</span>
+          <span className="rounded-md border border-[#d9dee6] bg-white px-3 py-1.5 font-mono text-xs text-[#687384]">Демо · этап 2</span>
         </header>
 
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(330px,0.85fr)]">
@@ -54,27 +85,31 @@ export default function Home() {
             <div className="flex flex-wrap items-center gap-4">
               <button
                 type="button"
-                disabled={validation.status !== "valid"}
-                onClick={() => setIsPrepared(true)}
+                disabled={validation.status !== "valid" || requestState === "sending"}
+                onClick={analyzeLead}
                 className="rounded-md bg-[#2855b8] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#21499f] disabled:cursor-not-allowed disabled:bg-[#aab5c6]"
               >
-                Проверить лид
+                {requestState === "sending" ? "Проверяем..." : "Проверить лид"}
               </button>
-              <p className="text-sm text-[#818b99]">На этом этапе проверяются только данные JSON.</p>
+              <p className="text-sm text-[#818b99]">На этом этапе сервер проверяет данные лида.</p>
             </div>
           </div>
 
           <div className="space-y-4">
-            <ProcessStatus isValid={validation.status === "valid"} isPrepared={isPrepared} />
+            <ProcessStatus isValid={validation.status === "valid"} requestState={requestState} />
             <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
               <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
               <p className="mt-4 text-sm font-medium text-[#384253]">
-                {isPrepared ? "Лид готов к анализу" : "Результат появится после проверки"}
+                {requestState === "validated"
+                  ? "Лид принят сервером"
+                  : requestState === "error"
+                    ? "Не удалось проверить лид"
+                    : "Результат появится после проверки"}
               </p>
               <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
-                {isPrepared
-                  ? "Поиск публичных источников и AI-скоринг подключим в следующей итерации."
-                  : "Сначала загрузите пример или вставьте JSON лида слева."}
+                {requestError ?? (requestState === "validated"
+                  ? "Данные прошли серверную проверку. Поиск источников и AI-скоринг подключим в следующей итерации."
+                  : "Сначала загрузите пример или вставьте JSON лида слева.")}
               </p>
             </section>
           </div>
