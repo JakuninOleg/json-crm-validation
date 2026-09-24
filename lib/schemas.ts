@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { assessmentSchema } from "@/lib/scoring";
+import { verificationReportSchema } from "@/lib/verification";
 
 const optionalText = z.string().optional();
 
@@ -21,54 +23,28 @@ export const leadSchema = z.looseObject({
 
 export type Lead = z.infer<typeof leadSchema>;
 
-const sourceUrlSchema = z.url().refine((url) => /^https?:\/\//i.test(url));
+export const analysisResultSchema = verificationReportSchema.extend({ assessment: assessmentSchema });
+export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 
-export const verificationSchema = z.object({
-  claim: z.string().trim().min(1),
-  status: z.enum(["confirmed", "unconfirmed", "no_public_confirmation"]),
-  source_url: sourceUrlSchema.nullable(),
-}).superRefine((verification, context) => {
-  if (verification.status !== "no_public_confirmation" && !verification.source_url) {
-    context.addIssue({ code: "custom", message: "Проверка по публичному источнику должна иметь ссылку." });
-  }
-  if (verification.status === "no_public_confirmation" && verification.source_url) {
-    context.addIssue({ code: "custom", message: "Отсутствие подтверждения не должно иметь источник." });
-  }
-});
-
-export const leadResultSchema = z.object({
-  qualification: z.enum(["HOT", "WARM", "COLD"]),
-  score: z.number().int().min(0).max(100),
-  verification_confidence: z.number().int().min(0).max(100),
-  positive_signals: z.array(z.string().trim().min(1)),
-  risk_signals: z.array(z.string().trim().min(1)),
-  verifications: z.array(verificationSchema).min(1),
-  sources: z.array(sourceUrlSchema),
-  crm_comment: z.string().trim().min(1),
-});
-
-export type LeadResult = z.infer<typeof leadResultSchema>;
-
-export function toCrmOutput(leadId: number, result: LeadResult) {
+export function toCrmOutput(leadId: number, result: AnalysisResult) {
+  const assessment = result.assessment;
   return {
     lead_id: leadId,
-    qualification: result.qualification,
-    qualification_color: {
-      HOT: "green",
-      WARM: "yellow",
-      COLD: "red",
-    }[result.qualification],
-    score: result.score,
-    verification_confidence: result.verification_confidence,
-    ai_comment: result.crm_comment,
+    qualification: assessment.qualification,
+    qualification_color: { HOT: "green", WARM: "yellow", COLD: "red" }[assessment.qualification],
+    score: assessment.score,
+    verification_confidence: assessment.verification_confidence,
+    ai_comment: assessment.crm_comment,
+    review_required: assessment.review_required,
+    sources: result.sources,
   };
 }
 
 export const analyzeResponseSchema = z.discriminatedUnion("status", [
   z.object({
-    status: z.literal("analyzed"),
+    status: z.literal("verified"),
     lead_id: z.number().int().positive(),
-    result: leadResultSchema,
+    result: analysisResultSchema,
   }),
   z.object({
     status: z.literal("error"),
@@ -78,6 +54,14 @@ export const analyzeResponseSchema = z.discriminatedUnion("status", [
 ]);
 
 export type AnalyzeResponse = z.infer<typeof analyzeResponseSchema>;
+
+export const analysisStageSchema = z.enum(["accepted", "searching", "fetching", "analyzing", "validating", "scoring"]);
+export type AnalysisStage = z.infer<typeof analysisStageSchema>;
+export const analysisEventSchema = z.union([
+  z.object({ status: z.literal("progress"), stage: analysisStageSchema }),
+  analyzeResponseSchema,
+]);
+export type AnalysisEvent = z.infer<typeof analysisEventSchema>;
 
 export type ValidationResult =
   | { status: "empty"; message: null }

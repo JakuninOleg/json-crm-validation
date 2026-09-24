@@ -28,6 +28,16 @@ function getValidationMessage(status: JsonInputProps["status"], error: string | 
   return <p className="text-[#818a98]">Обязательные поля: lead_id, name, company_name.</p>;
 }
 
+function canFormatJson(value: string) {
+  if (!value.trim()) return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function JsonInput({
   value,
   onChange,
@@ -80,7 +90,7 @@ export function JsonInput({
           <button
             type="button"
             onClick={onFormat}
-            disabled={!value.trim()}
+            disabled={!canFormatJson(value)}
             className="rounded-md border border-[#dce1e8] bg-white px-3 py-2 text-sm font-medium text-[#343c49] hover:bg-[#f5f7fa] disabled:cursor-not-allowed disabled:opacity-45"
           >
             Форматировать

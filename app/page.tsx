@@ -1,27 +1,29 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { JsonInput } from "@/components/JsonInput";
 import { LeadResult } from "@/components/LeadResult";
 import { CrmOutput } from "@/components/CrmOutput";
 import { ProcessStatus } from "@/components/ProcessStatus";
 import type { RequestState } from "@/components/ProcessStatus";
+import { AnalysisRequestError, readAnalysis } from "@/lib/analyze-stream";
 import { exampleLead } from "@/lib/example-lead";
-import { analyzeResponseSchema, validateLeadJson } from "@/lib/schemas";
-import type { LeadResult as LeadResultData } from "@/lib/schemas";
+import { validateLeadJson } from "@/lib/schemas";
+import type { AnalysisStage } from "@/lib/schemas";
+import type { AnalysisResult } from "@/lib/schemas";
 
 type AnalysisState =
   | { status: "idle" }
-  | { status: "sending" }
-  | { status: "analyzed"; leadId: number; result: LeadResultData }
-  | { status: "error"; message: string };
+  | { status: "sending"; stage: AnalysisStage | "sending" }
+  | { status: "verified"; leadId: number; result: AnalysisResult }
+  | { status: "error"; stage: AnalysisStage | "sending"; message: string };
 
 function getResultContent(requestState: RequestState) {
   switch (requestState) {
     case "sending":
       return { title: "Проверяем данные", description: "Ожидаем ответ сервера." };
-    case "analyzed":
-      return { title: "Анализ готов", description: "Результат анализа лида получен." };
+    case "verified":
+      return { title: "Проверка готова", description: "Сведения заявки сопоставлены с публичными источниками." };
     case "error":
       return { title: "Не удалось проверить лид", description: "Повторите попытку." };
     default:
@@ -36,10 +38,13 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: "idle" });
   const requestVersion = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => activeRequest.current?.abort(), []);
   const validation = useMemo(() => validateLeadJson(input), [input]);
   const resultContent = getResultContent(analysis.status);
 
   function updateInput(value: string) {
+    activeRequest.current?.abort();
     requestVersion.current += 1;
     setInput(value);
     setAnalysis({ status: "idle" });
@@ -58,34 +63,32 @@ export default function Home() {
     if (validation.status !== "valid") return;
 
     const version = ++requestVersion.current;
-    setAnalysis({ status: "sending" });
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    let stage: AnalysisStage | "sending" = "sending";
+    setAnalysis({ status: "sending", stage });
 
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(validation.lead),
+        signal: controller.signal,
       });
-      const data = analyzeResponseSchema.safeParse(await response.json());
+      const data = await readAnalysis(response, (nextStage) => {
+        stage = nextStage;
+        if (version === requestVersion.current) setAnalysis({ status: "sending", stage });
+      });
 
       if (version !== requestVersion.current) return;
-      if (!data.success) {
-        setAnalysis({ status: "error", message: "Сервер вернул некорректный ответ." });
-        return;
-      }
-      if (data.data.status === "error") {
-        setAnalysis({ status: "error", message: data.data.message });
-        return;
-      }
-      if (!response.ok) {
-        setAnalysis({ status: "error", message: "Сервер не смог проверить лид. Повторите попытку." });
-        return;
-      }
-
-      setAnalysis({ status: "analyzed", leadId: data.data.lead_id, result: data.data.result });
-    } catch {
+      setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result });
+    } catch (error) {
       if (version !== requestVersion.current) return;
-      setAnalysis({ status: "error", message: "Не удалось завершить проверку. Повторите попытку." });
+      let message = "Не удалось завершить проверку. Повторите попытку.";
+      // Only our explicit messages are suitable for the UI; parsing failures stay generic.
+      if (error instanceof AnalysisRequestError) message = error.message;
+      setAnalysis({ status: "error", stage, message });
     }
   }
 
@@ -100,7 +103,7 @@ export default function Home() {
             </div>
             <h1 className="mt-5 text-2xl font-semibold tracking-[-0.035em] text-[#202735] sm:text-[30px]">Проверка лида</h1>
             <p className="mt-2 max-w-xl text-sm leading-6 text-[#6f7887]">
-              Вставьте JSON заявки для проверки и оценки лида.
+              Вставьте JSON заявки для проверки сведений по публичным источникам.
             </p>
           </div>
         </header>
@@ -127,23 +130,28 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="min-w-0 space-y-4">
-            <ProcessStatus isValid={validation.status === "valid"} requestState={analysis.status} />
-            {analysis.status === "analyzed" ? (
-              <>
-                <LeadResult result={analysis.result} />
-                <CrmOutput leadId={analysis.leadId} result={analysis.result} />
-              </>
-            ) : (
-              <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
-                <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
-                <p className="mt-4 text-sm font-medium text-[#384253]">{resultContent.title}</p>
-                <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
-                  {analysis.status === "error" ? analysis.message : resultContent.description}
-                </p>
-              </section>
-            )}
-          </div>
+          <ProcessStatus
+            isValid={validation.status === "valid"}
+            requestState={analysis.status}
+            stage={"stage" in analysis ? analysis.stage : undefined}
+            error={analysis.status === "error" ? analysis.message : undefined}
+          />
+        </div>
+        <div className="mt-6 min-w-0 space-y-5">
+          {analysis.status === "verified" ? (
+            <>
+              <LeadResult result={analysis.result} />
+              <CrmOutput leadId={analysis.leadId} result={analysis.result} />
+            </>
+          ) : (
+            <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
+              <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
+              <p className="mt-4 text-sm font-medium text-[#384253]">{resultContent.title}</p>
+              <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
+                {analysis.status === "error" ? analysis.message : resultContent.description}
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </main>
