@@ -11,3 +11,6 @@ out/
 
 # Local planning documents
 docs/
+
+# Local project rules
+.cursor/rules/
