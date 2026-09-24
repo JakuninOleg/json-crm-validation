@@ -2,20 +2,25 @@
 
 import { useMemo, useRef, useState } from "react";
 import { JsonInput } from "@/components/JsonInput";
+import { LeadResult } from "@/components/LeadResult";
 import { ProcessStatus } from "@/components/ProcessStatus";
 import type { RequestState } from "@/components/ProcessStatus";
 import { exampleLead } from "@/lib/example-lead";
 import { analyzeResponseSchema, validateLeadJson } from "@/lib/schemas";
+import type { LeadResult as LeadResultData } from "@/lib/schemas";
+
+type AnalysisState =
+  | { status: "idle" }
+  | { status: "sending" }
+  | { status: "analyzed"; result: LeadResultData }
+  | { status: "error"; message: string };
 
 function getResultContent(requestState: RequestState) {
   switch (requestState) {
     case "sending":
       return { title: "Проверяем данные", description: "Ожидаем ответ сервера." };
-    case "validated":
-      return {
-        title: "Лид принят сервером",
-        description: "Данные прошли проверку обязательных полей.",
-      };
+    case "analyzed":
+      return { title: "Анализ готов", description: "Результат анализа лида получен." };
     case "error":
       return { title: "Не удалось проверить лид", description: "Повторите попытку." };
     default:
@@ -28,17 +33,15 @@ function getResultContent(requestState: RequestState) {
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [requestState, setRequestState] = useState<RequestState>("idle");
-  const [requestError, setRequestError] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisState>({ status: "idle" });
   const requestVersion = useRef(0);
   const validation = useMemo(() => validateLeadJson(input), [input]);
-  const resultContent = getResultContent(requestState);
+  const resultContent = getResultContent(analysis.status);
 
   function updateInput(value: string) {
     requestVersion.current += 1;
     setInput(value);
-    setRequestState("idle");
-    setRequestError(null);
+    setAnalysis({ status: "idle" });
   }
 
   function formatInput() {
@@ -54,8 +57,7 @@ export default function Home() {
     if (validation.status !== "valid") return;
 
     const version = ++requestVersion.current;
-    setRequestState("sending");
-    setRequestError(null);
+    setAnalysis({ status: "sending" });
 
     try {
       const response = await fetch("/api/analyze", {
@@ -67,26 +69,22 @@ export default function Home() {
 
       if (version !== requestVersion.current) return;
       if (!data.success) {
-        setRequestState("error");
-        setRequestError("Сервер вернул некорректный ответ.");
+        setAnalysis({ status: "error", message: "Сервер вернул некорректный ответ." });
         return;
       }
       if (data.data.status === "error") {
-        setRequestState("error");
-        setRequestError(data.data.message);
+        setAnalysis({ status: "error", message: data.data.message });
         return;
       }
       if (!response.ok) {
-        setRequestState("error");
-        setRequestError("Сервер не смог проверить лид. Повторите попытку.");
+        setAnalysis({ status: "error", message: "Сервер не смог проверить лид. Повторите попытку." });
         return;
       }
 
-      setRequestState("validated");
+      setAnalysis({ status: "analyzed", result: data.data.result });
     } catch {
       if (version !== requestVersion.current) return;
-      setRequestState("error");
-      setRequestError("Не удалось завершить проверку. Повторите попытку.");
+      setAnalysis({ status: "error", message: "Не удалось завершить проверку. Повторите попытку." });
     }
   }
 
@@ -101,7 +99,7 @@ export default function Home() {
             </div>
             <h1 className="mt-5 text-2xl font-semibold tracking-[-0.035em] text-[#202735] sm:text-[30px]">Проверка лида</h1>
             <p className="mt-2 max-w-xl text-sm leading-6 text-[#6f7887]">
-              Вставьте JSON заявки, чтобы проверить формат данных перед анализом.
+              Вставьте JSON заявки для проверки и оценки лида.
             </p>
           </div>
         </header>
@@ -119,24 +117,28 @@ export default function Home() {
             <div>
               <button
                 type="button"
-                disabled={validation.status !== "valid" || requestState === "sending"}
+                disabled={validation.status !== "valid" || analysis.status === "sending"}
                 onClick={analyzeLead}
                 className="rounded-md bg-[#2855b8] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#21499f] disabled:cursor-not-allowed disabled:bg-[#aab5c6]"
               >
-                {requestState === "sending" ? "Проверяем..." : "Проверить лид"}
+                {analysis.status === "sending" ? "Проверяем..." : "Проверить лид"}
               </button>
             </div>
           </div>
 
           <div className="space-y-4">
-            <ProcessStatus isValid={validation.status === "valid"} requestState={requestState} />
-            <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
-              <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
-              <p className="mt-4 text-sm font-medium text-[#384253]">{resultContent.title}</p>
-              <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
-                {requestError ?? resultContent.description}
-              </p>
-            </section>
+            <ProcessStatus isValid={validation.status === "valid"} requestState={analysis.status} />
+            {analysis.status === "analyzed" ? (
+              <LeadResult result={analysis.result} />
+            ) : (
+              <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
+                <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
+                <p className="mt-4 text-sm font-medium text-[#384253]">{resultContent.title}</p>
+                <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
+                  {analysis.status === "error" ? analysis.message : resultContent.description}
+                </p>
+              </section>
+            )}
           </div>
         </div>
       </div>

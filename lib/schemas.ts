@@ -21,15 +21,29 @@ export const leadSchema = z.looseObject({
 
 export type Lead = z.infer<typeof leadSchema>;
 
-// This is the required AI result from the assignment. The server will use it
-// to reject malformed model output before the result reaches the page.
+const sourceUrlSchema = z.url().refine((url) => /^https?:\/\//i.test(url));
+
+export const verificationSchema = z.object({
+  claim: z.string().trim().min(1),
+  status: z.enum(["confirmed", "unconfirmed", "no_public_confirmation"]),
+  source_url: sourceUrlSchema.nullable(),
+}).superRefine((verification, context) => {
+  if (verification.status !== "no_public_confirmation" && !verification.source_url) {
+    context.addIssue({ code: "custom", message: "Проверка по публичному источнику должна иметь ссылку." });
+  }
+  if (verification.status === "no_public_confirmation" && verification.source_url) {
+    context.addIssue({ code: "custom", message: "Отсутствие подтверждения не должно иметь источник." });
+  }
+});
+
 export const leadResultSchema = z.object({
   qualification: z.enum(["HOT", "WARM", "COLD"]),
   score: z.number().int().min(0).max(100),
   verification_confidence: z.number().int().min(0).max(100),
   positive_signals: z.array(z.string().trim().min(1)),
   risk_signals: z.array(z.string().trim().min(1)),
-  sources: z.array(z.url().refine((url) => /^https?:\/\//i.test(url))),
+  verifications: z.array(verificationSchema).min(1),
+  sources: z.array(sourceUrlSchema),
   crm_comment: z.string().trim().min(1),
 });
 
@@ -51,10 +65,14 @@ export function toCrmOutput(leadId: number, result: LeadResult) {
 }
 
 export const analyzeResponseSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("validated"), lead_id: z.number().int().positive() }),
+  z.object({
+    status: z.literal("analyzed"),
+    lead_id: z.number().int().positive(),
+    result: leadResultSchema,
+  }),
   z.object({
     status: z.literal("error"),
-    code: z.enum(["INVALID_JSON", "INVALID_INPUT"]),
+    code: z.enum(["INVALID_JSON", "INVALID_INPUT", "OPENAI_ERROR", "AI_INVALID_RESULT"]),
     message: z.string(),
   }),
 ]);

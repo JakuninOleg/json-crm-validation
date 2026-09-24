@@ -1,4 +1,4 @@
-export type RequestState = "idle" | "sending" | "validated" | "error";
+export type RequestState = "idle" | "sending" | "analyzed" | "error";
 
 type ProcessStatusProps = {
   isValid: boolean;
@@ -9,8 +9,8 @@ function getServerStatusText(requestState: RequestState) {
   switch (requestState) {
     case "sending":
       return "Ожидаем ответ сервера";
-    case "validated":
-      return "Сервер проверил формат лида";
+    case "analyzed":
+      return "Результат анализа готов";
     case "error":
       return "Проверка не завершена";
     default:
@@ -20,12 +20,12 @@ function getServerStatusText(requestState: RequestState) {
 
 export function ProcessStatus({ isValid, requestState }: ProcessStatusProps) {
   const isSending = requestState === "sending";
-  const isValidated = requestState === "validated";
+  const isAnalyzed = requestState === "analyzed";
   const hasError = requestState === "error";
   let serverStatusStyle = "bg-[#edf0f4] text-[#8c96a5]";
   let serverStatusIcon = "2";
 
-  if (isValidated) {
+  if (isAnalyzed) {
     serverStatusStyle = "bg-emerald-100 text-emerald-800";
     serverStatusIcon = "✓";
   } else if (isSending) {
@@ -39,7 +39,7 @@ export function ProcessStatus({ isValid, requestState }: ProcessStatusProps) {
     <section className="overflow-hidden rounded-xl border border-[#dfe3e9] bg-white shadow-[0_1px_2px_rgba(20,26,40,0.04)]">
       <div className="border-b border-[#e7e9ee] px-5 py-4">
         <h2 className="font-mono text-sm font-semibold tracking-tight text-[#2b3342]">PROCESS</h2>
-        <p className="mt-1 text-sm text-[#747d8c]">Подготовка данных к анализу</p>
+        <p className="mt-1 text-sm text-[#747d8c]">Проверка данных и поиск источников</p>
       </div>
       <div className="px-5 py-5">
         <ol className="space-y-5 text-sm">

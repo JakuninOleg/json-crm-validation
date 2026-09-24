@@ -1,10 +1,20 @@
+import { analyzeLead, InvalidAnalysisError } from "@/lib/openai";
 import { describeLeadIssue, leadSchema } from "@/lib/schemas";
+
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   let body: unknown;
 
   try {
-    body = await request.json();
+    const rawBody = await request.text();
+    if (rawBody.length > 12_000) {
+      return Response.json(
+        { status: "error", code: "INVALID_INPUT", message: "JSON лида слишком большой." },
+        { status: 413 },
+      );
+    }
+    body = JSON.parse(rawBody);
   } catch {
     return Response.json(
       { status: "error", code: "INVALID_JSON", message: "Отправлен некорректный JSON." },
@@ -20,6 +30,20 @@ export async function POST(request: Request) {
     );
   }
 
-  // The next iteration will analyze this validated lead with OpenAI.
-  return Response.json({ status: "validated", lead_id: lead.data.lead_id });
+  try {
+    const result = await analyzeLead(lead.data);
+    return Response.json({ status: "analyzed", lead_id: lead.data.lead_id, result });
+  } catch (error) {
+    if (error instanceof InvalidAnalysisError) {
+      return Response.json(
+        { status: "error", code: "AI_INVALID_RESULT", message: "Не удалось получить достоверный результат анализа." },
+        { status: 502 },
+      );
+    }
+
+    return Response.json(
+      { status: "error", code: "OPENAI_ERROR", message: "Сервис анализа временно недоступен. Повторите попытку позже." },
+      { status: 502 },
+    );
+  }
 }
