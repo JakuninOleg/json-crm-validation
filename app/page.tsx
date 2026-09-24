@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { JsonInput } from "@/components/JsonInput";
 import { LeadResult } from "@/components/LeadResult";
+import { CrmOutput } from "@/components/CrmOutput";
 import { ProcessStatus } from "@/components/ProcessStatus";
 import type { RequestState } from "@/components/ProcessStatus";
 import { exampleLead } from "@/lib/example-lead";
@@ -12,7 +13,7 @@ import type { LeadResult as LeadResultData } from "@/lib/schemas";
 type AnalysisState =
   | { status: "idle" }
   | { status: "sending" }
-  | { status: "analyzed"; result: LeadResultData }
+  | { status: "analyzed"; leadId: number; result: LeadResultData }
   | { status: "error"; message: string };
 
 function getResultContent(requestState: RequestState) {
@@ -81,7 +82,7 @@ export default function Home() {
         return;
       }
 
-      setAnalysis({ status: "analyzed", result: data.data.result });
+      setAnalysis({ status: "analyzed", leadId: data.data.lead_id, result: data.data.result });
     } catch {
       if (version !== requestVersion.current) return;
       setAnalysis({ status: "error", message: "Не удалось завершить проверку. Повторите попытку." });
@@ -105,7 +106,7 @@ export default function Home() {
         </header>
 
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(330px,0.85fr)]">
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <JsonInput
               value={input}
               onChange={updateInput}
@@ -126,10 +127,13 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <ProcessStatus isValid={validation.status === "valid"} requestState={analysis.status} />
             {analysis.status === "analyzed" ? (
-              <LeadResult result={analysis.result} />
+              <>
+                <LeadResult result={analysis.result} />
+                <CrmOutput leadId={analysis.leadId} result={analysis.result} />
+              </>
             ) : (
               <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
                 <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
