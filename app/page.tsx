@@ -14,7 +14,7 @@ function getResultContent(requestState: RequestState) {
     case "validated":
       return {
         title: "Лид принят сервером",
-        description: "Данные прошли серверную проверку. Поиск источников и AI-скоринг подключим в следующей итерации.",
+        description: "Данные прошли проверку обязательных полей.",
       };
     case "error":
       return { title: "Не удалось проверить лид", description: "Повторите попытку." };
@@ -93,7 +93,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f8fa] px-4 py-7 sm:px-7 lg:px-10">
       <div className="mx-auto max-w-[1320px]">
-        <header className="mb-8 flex flex-wrap items-start justify-between gap-5 border-b border-[#e0e4ea] pb-6">
+        <header className="mb-8 border-b border-[#e0e4ea] pb-6">
           <div>
             <div className="flex items-center gap-2.5">
               <span className="flex size-8 items-center justify-center rounded-lg bg-[#202a3a] font-mono text-sm font-bold text-white">W</span>
@@ -104,7 +104,6 @@ export default function Home() {
               Вставьте JSON заявки, чтобы проверить формат данных перед анализом.
             </p>
           </div>
-          <span className="rounded-md border border-[#d9dee6] bg-white px-3 py-1.5 font-mono text-xs text-[#687384]">Демо · этап 2</span>
         </header>
 
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(330px,0.85fr)]">
@@ -117,7 +116,7 @@ export default function Home() {
               status={validation.status}
               error={validation.message}
             />
-            <div className="flex flex-wrap items-center gap-4">
+            <div>
               <button
                 type="button"
                 disabled={validation.status !== "valid" || requestState === "sending"}
@@ -126,7 +125,6 @@ export default function Home() {
               >
                 {requestState === "sending" ? "Проверяем..." : "Проверить лид"}
               </button>
-              <p className="text-sm text-[#818b99]">На этом этапе сервер проверяет данные лида.</p>
             </div>
           </div>
 

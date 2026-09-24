@@ -61,13 +61,6 @@ export function ProcessStatus({ isValid, requestState }: ProcessStatusProps) {
               <p className="mt-0.5 text-[#8a93a1]">{getServerStatusText(requestState)}</p>
             </div>
           </li>
-          <li className="flex items-start gap-3">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#edf0f4] text-xs text-[#8c96a5]">3</span>
-            <div>
-              <p className="font-medium text-[#7f8997]">Публичные источники и скоринг</p>
-              <p className="mt-0.5 text-[#9aa3af]">Подключим на следующем этапе</p>
-            </div>
-          </li>
         </ol>
       </div>
     </section>
