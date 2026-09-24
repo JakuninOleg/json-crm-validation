@@ -3,15 +3,36 @@
 import { useMemo, useRef, useState } from "react";
 import { JsonInput } from "@/components/JsonInput";
 import { ProcessStatus } from "@/components/ProcessStatus";
+import type { RequestState } from "@/components/ProcessStatus";
 import { exampleLead } from "@/lib/example-lead";
 import { analyzeResponseSchema, validateLeadJson } from "@/lib/schemas";
 
+function getResultContent(requestState: RequestState) {
+  switch (requestState) {
+    case "sending":
+      return { title: "Проверяем данные", description: "Ожидаем ответ сервера." };
+    case "validated":
+      return {
+        title: "Лид принят сервером",
+        description: "Данные прошли серверную проверку. Поиск источников и AI-скоринг подключим в следующей итерации.",
+      };
+    case "error":
+      return { title: "Не удалось проверить лид", description: "Повторите попытку." };
+    default:
+      return {
+        title: "Результат появится после проверки",
+        description: "Загрузите пример или вставьте JSON лида слева.",
+      };
+  }
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
-  const [requestState, setRequestState] = useState<"idle" | "sending" | "validated" | "error">("idle");
+  const [requestState, setRequestState] = useState<RequestState>("idle");
   const [requestError, setRequestError] = useState<string | null>(null);
   const requestVersion = useRef(0);
   const validation = useMemo(() => validateLeadJson(input), [input]);
+  const resultContent = getResultContent(requestState);
 
   function updateInput(value: string) {
     requestVersion.current += 1;
@@ -23,8 +44,9 @@ export default function Home() {
   function formatInput() {
     try {
       updateInput(JSON.stringify(JSON.parse(input), null, 2));
-    } catch {
-      // The validation message beside the editor explains the syntax error.
+    } catch (error) {
+      // Invalid syntax is already shown beside the editor.
+      if (!(error instanceof SyntaxError)) throw error;
     }
   }
 
@@ -44,14 +66,27 @@ export default function Home() {
       const data = analyzeResponseSchema.safeParse(await response.json());
 
       if (version !== requestVersion.current) return;
-      if (!data.success) throw new Error("Некорректный ответ сервера.");
-      if (data.data.status === "error") throw new Error(data.data.message);
+      if (!data.success) {
+        setRequestState("error");
+        setRequestError("Сервер вернул некорректный ответ.");
+        return;
+      }
+      if (data.data.status === "error") {
+        setRequestState("error");
+        setRequestError(data.data.message);
+        return;
+      }
+      if (!response.ok) {
+        setRequestState("error");
+        setRequestError("Сервер не смог проверить лид. Повторите попытку.");
+        return;
+      }
 
       setRequestState("validated");
-    } catch (error) {
+    } catch {
       if (version !== requestVersion.current) return;
       setRequestState("error");
-      setRequestError(error instanceof Error ? error.message : "Не удалось проверить лид. Повторите попытку.");
+      setRequestError("Не удалось завершить проверку. Повторите попытку.");
     }
   }
 
@@ -99,17 +134,9 @@ export default function Home() {
             <ProcessStatus isValid={validation.status === "valid"} requestState={requestState} />
             <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">
               <h2 className="font-mono text-sm font-semibold text-[#6e7887]">RESULT</h2>
-              <p className="mt-4 text-sm font-medium text-[#384253]">
-                {requestState === "validated"
-                  ? "Лид принят сервером"
-                  : requestState === "error"
-                    ? "Не удалось проверить лид"
-                    : "Результат появится после проверки"}
-              </p>
+              <p className="mt-4 text-sm font-medium text-[#384253]">{resultContent.title}</p>
               <p className="mt-1.5 max-w-sm text-sm leading-6 text-[#8791a0]">
-                {requestError ?? (requestState === "validated"
-                  ? "Данные прошли серверную проверку. Поиск источников и AI-скоринг подключим в следующей итерации."
-                  : "Сначала загрузите пример или вставьте JSON лида слева.")}
+                {requestError ?? resultContent.description}
               </p>
             </section>
           </div>

@@ -9,6 +9,25 @@ type JsonInputProps = {
   error: string | null;
 };
 
+const statusLabels = {
+  empty: "NO INPUT",
+  invalid: "INVALID",
+  valid: "VALID",
+} satisfies Record<JsonInputProps["status"], string>;
+
+const statusStyles = {
+  empty: "bg-[#f2f4f7] text-[#7a8492]",
+  invalid: "bg-red-50 text-red-700",
+  valid: "bg-emerald-50 text-emerald-700",
+} satisfies Record<JsonInputProps["status"], string>;
+
+function getValidationMessage(status: JsonInputProps["status"], error: string | null) {
+  if (error) return <p id="json-error" className="text-red-700">{error}</p>;
+  if (status === "valid") return <p className="text-emerald-700">JSON и обязательные поля лида проверены.</p>;
+
+  return <p className="text-[#818a98]">Обязательные поля: lead_id, name, company_name.</p>;
+}
+
 export function JsonInput({
   value,
   onChange,
@@ -25,16 +44,10 @@ export function JsonInput({
           <p className="mt-1 text-sm text-[#747d8c]">Вставьте данные лида из квиза</p>
         </div>
         <span
-          className={`rounded-md px-2.5 py-1 font-mono text-xs font-semibold ${
-            status === "valid"
-              ? "bg-emerald-50 text-emerald-700"
-              : status === "invalid"
-                ? "bg-red-50 text-red-700"
-                : "bg-[#f2f4f7] text-[#7a8492]"
-          }`}
+          className={`rounded-md px-2.5 py-1 font-mono text-xs font-semibold ${statusStyles[status]}`}
           aria-live="polite"
         >
-          {status === "valid" ? "VALID" : status === "invalid" ? "INVALID" : "NO INPUT"}
+          {statusLabels[status]}
         </span>
       </div>
 
@@ -60,13 +73,7 @@ export function JsonInput({
         </div>
 
         <div className="mt-3 min-h-5 text-sm" aria-live="polite">
-          {error ? (
-            <p id="json-error" className="text-red-700">{error}</p>
-          ) : status === "valid" ? (
-            <p className="text-emerald-700">JSON и обязательные поля лида проверены.</p>
-          ) : (
-            <p className="text-[#818a98]">Обязательные поля: lead_id, name, company_name.</p>
-          )}
+          {getValidationMessage(status, error)}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">

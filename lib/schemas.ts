@@ -2,7 +2,8 @@ import { z } from "zod";
 
 const optionalText = z.string().optional();
 
-export const leadSchema = z.object({
+// Quiz submissions may contain additional fields useful for later analysis.
+export const leadSchema = z.looseObject({
   lead_id: z.number().int().positive(),
   name: z.string().trim().min(1),
   company_name: z.string().trim().min(1),
@@ -67,15 +68,21 @@ export type ValidationResult =
 
 export function describeLeadIssue(error: z.ZodError): string {
   const issue = error.issues[0];
+  if (!issue) return "Проверьте данные лида.";
+
   const field = issue.path.length ? issue.path.join(".") : "корневой объект";
   let message = issue.message;
 
   if (issue.code === "invalid_type") {
-    message = issue.expected === "object"
-      ? "нужен JSON-объект с данными лида"
-      : issue.expected === "number"
-        ? "укажите число"
-        : "укажите текстовое значение";
+    if (issue.expected === "object") {
+      message = "нужен JSON-объект с данными лида";
+    } else if (issue.expected === "int") {
+      message = "укажите целое число";
+    } else if (issue.expected === "number") {
+      message = "укажите число";
+    } else {
+      message = "укажите текстовое значение";
+    }
   } else if (issue.code === "too_small") {
     message = field === "lead_id" ? "значение должно быть больше нуля" : "поле не может быть пустым";
   } else if (issue.code === "invalid_format") {
