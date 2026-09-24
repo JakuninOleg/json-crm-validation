@@ -1,16 +1,21 @@
 import type { AnalysisStage } from "@/lib/schemas";
 
-export type RequestState = "idle" | "sending" | "verified" | "error";
+export type RequestState = "idle" | "checking_cache" | "cached" | "sending" | "verified" | "error";
+export type CacheStatus = "idle" | "checking" | "hit" | "miss" | "bypassed" | "unavailable";
 
 type ProcessStatusProps = {
   isValid: boolean;
   requestState: RequestState;
+  cacheStatus: CacheStatus;
+  cachedAt?: string;
   stage?: AnalysisStage | "sending";
   error?: string;
+  notice?: string;
 };
 
 const steps = [
   { title: "JSON проверен", description: "Синтаксис и обязательные поля" },
+  { title: "Поиск сохранённого отчёта", description: "Проверяем данные в этом браузере" },
   { title: "Данные отправлены", description: "Сервер принимает заявку" },
   { title: "Поиск публичных источников", description: "Сведения о компании и представителе" },
   { title: "Получение страниц", description: "Сервер проверяет доступность и содержание" },
@@ -20,10 +25,44 @@ const steps = [
   { title: "Проверка готова", description: "Статусы фактов и ссылки на источники" },
 ];
 
-const stageIndexes = { sending: 1, accepted: 2, searching: 2, fetching: 3, analyzing: 4, validating: 5, scoring: 6 };
+const stageIndexes = { sending: 2, accepted: 3, searching: 3, fetching: 4, analyzing: 5, validating: 6, scoring: 7 };
 
-export function ProcessStatus({ isValid, requestState, stage = "sending", error }: ProcessStatusProps) {
+type StepStatus = "waiting" | "done" | "active" | "error" | "skipped" | "warning";
+
+function getStepStatus(
+  index: number, isValid: boolean, requestState: RequestState, cacheStatus: CacheStatus, activeIndex: number,
+): StepStatus {
+  if (index === 0) return isValid ? "done" : "waiting";
+  if (index === 1) {
+    if (cacheStatus === "checking") return "active";
+    if (cacheStatus === "hit" || cacheStatus === "miss") return "done";
+    if (cacheStatus === "bypassed") return "skipped";
+    if (cacheStatus === "unavailable") return "warning";
+    return "waiting";
+  }
+  if (requestState === "verified") return "done";
+  if (requestState === "sending" || requestState === "error") {
+    if (index < activeIndex) return "done";
+    if (index === activeIndex) return requestState === "error" ? "error" : "active";
+  }
+  return "waiting";
+}
+
+function getCacheDescription(cacheStatus: CacheStatus, cachedAt?: string) {
+  if (cacheStatus === "hit" && cachedAt) {
+    return `Отчёт найден, проверка от ${new Date(cachedAt).toLocaleString("ru-RU")}. Новые запросы не выполнялись.`;
+  }
+  if (cacheStatus === "miss") return "Сохранённого отчёта нет. Запускаем новую проверку.";
+  if (cacheStatus === "bypassed") return "Поиск пропущен: запрошена новая проверка.";
+  if (cacheStatus === "unavailable") return "Хранилище браузера недоступно. Запускаем новую проверку.";
+  return "Проверяем данные в этом браузере";
+}
+
+export function ProcessStatus({
+  isValid, requestState, cacheStatus, cachedAt, stage = "sending", error, notice,
+}: ProcessStatusProps) {
   const activeIndex = stageIndexes[stage];
+  const visibleSteps = requestState === "cached" ? steps.slice(0, 2) : steps;
   return (
     <section aria-label="Ход проверки" className="min-w-0 rounded-xl border border-[#dfe3e9] bg-white shadow-[0_1px_2px_rgba(20,26,40,0.04)]">
       <div className="border-b border-[#e7e9ee] px-5 py-4">
@@ -31,13 +70,8 @@ export function ProcessStatus({ isValid, requestState, stage = "sending", error 
         <p className="mt-1 text-sm text-[#747d8c]">Ход проверки лида</p>
       </div>
       <ol aria-live="polite" className="space-y-6 px-5 py-6">
-        {steps.map((step, index) => {
-          let status = "waiting";
-          if (requestState === "verified" || (index === 0 && isValid)) status = "done";
-          if (requestState === "sending" || requestState === "error") {
-            if (index < activeIndex) status = "done";
-            if (index === activeIndex) status = requestState === "error" ? "error" : "active";
-          }
+        {visibleSteps.map((step, index) => {
+          const status = getStepStatus(index, isValid, requestState, cacheStatus, activeIndex);
           let icon = String(index + 1);
           let style = "bg-[#edf0f4] text-[#7a8492]";
           let label = "Ожидает";
@@ -52,9 +86,17 @@ export function ProcessStatus({ isValid, requestState, stage = "sending", error 
             icon = "×";
             style = "bg-red-100 text-red-800";
             label = "Ошибка";
+          } else if (status === "skipped") {
+            icon = "–";
+            label = "Не выполнялось";
+          } else if (status === "warning") {
+            icon = "!";
+            style = "bg-amber-100 text-amber-800";
+            label = "Недоступно";
           }
           let description = step.description;
-          if (index === 2 && stage === "accepted" && requestState === "sending") {
+          if (index === 1) description = getCacheDescription(cacheStatus, cachedAt);
+          if (index === 3 && stage === "accepted" && requestState === "sending") {
             description = "Запрос принят. Ожидаем начало поиска.";
           }
           return (
@@ -73,6 +115,7 @@ export function ProcessStatus({ isValid, requestState, stage = "sending", error 
         })}
       </ol>
       {error && <p role="alert" className="border-t border-red-100 px-5 py-4 text-sm text-red-700">{error}</p>}
+      {notice && <p role="status" className="border-t border-amber-100 px-5 py-4 text-sm text-amber-800">{notice}</p>}
     </section>
   );
 }

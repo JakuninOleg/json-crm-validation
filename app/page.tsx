@@ -5,23 +5,51 @@ import { JsonInput } from "@/components/JsonInput";
 import { LeadResult } from "@/components/LeadResult";
 import { CrmOutput } from "@/components/CrmOutput";
 import { ProcessStatus } from "@/components/ProcessStatus";
-import type { RequestState } from "@/components/ProcessStatus";
+import type { CacheStatus, RequestState } from "@/components/ProcessStatus";
 import { AnalysisRequestError, readAnalysis } from "@/lib/analyze-stream";
 import { exampleLead } from "@/lib/example-lead";
+import { findCachedReport, saveCachedReport } from "@/lib/lead-cache";
 import { validateLeadJson } from "@/lib/schemas";
 import type { AnalysisStage } from "@/lib/schemas";
 import type { AnalysisResult } from "@/lib/schemas";
 
+type CompletedCacheStatus = Extract<CacheStatus, "miss" | "bypassed" | "unavailable">;
+
 type AnalysisState =
   | { status: "idle" }
-  | { status: "sending"; stage: AnalysisStage | "sending" }
-  | { status: "verified"; leadId: number; result: AnalysisResult }
-  | { status: "error"; stage: AnalysisStage | "sending"; message: string };
+  | { status: "checking_cache" }
+  | { status: "cached"; leadId: number; result: AnalysisResult }
+  | { status: "sending"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus }
+  | { status: "verified"; leadId: number; result: AnalysisResult; cacheStatus: CompletedCacheStatus; cacheWarning?: string }
+  | { status: "error"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus; message: string; wasRefresh: boolean };
+
+function getCacheStatus(analysis: AnalysisState): CacheStatus {
+  if (analysis.status === "idle") return "idle";
+  if (analysis.status === "checking_cache") return "checking";
+  if (analysis.status === "cached") return "hit";
+  return analysis.cacheStatus;
+}
+
+function getSubmitLabel(analysis: AnalysisState) {
+  if (analysis.status === "checking_cache" || analysis.status === "sending") return "Проверяем...";
+  if (analysis.status === "cached" || analysis.status === "verified") return "Выполнить проверку заново";
+  if (analysis.status === "error" && analysis.wasRefresh) return "Повторить проверку заново";
+  return "Проверить лид";
+}
+
+function shouldRefresh(analysis: AnalysisState) {
+  if (analysis.status === "cached" || analysis.status === "verified") return true;
+  return analysis.status === "error" && analysis.wasRefresh;
+}
 
 function getResultContent(requestState: RequestState) {
   switch (requestState) {
+    case "checking_cache":
+      return { title: "Ищем сохранённый отчёт", description: "Проверяем данные в этом браузере." };
     case "sending":
       return { title: "Проверяем данные", description: "Ожидаем ответ сервера." };
+    case "cached":
+      return { title: "Найден сохранённый отчёт", description: "Новая проверка не запускалась." };
     case "verified":
       return { title: "Проверка готова", description: "Сведения заявки сопоставлены с публичными источниками." };
     case "error":
@@ -39,7 +67,10 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: "idle" });
   const requestVersion = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
-  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => () => {
+    requestVersion.current += 1;
+    activeRequest.current?.abort();
+  }, []);
   const validation = useMemo(() => validateLeadJson(input), [input]);
   const resultContent = getResultContent(analysis.status);
 
@@ -59,30 +90,59 @@ export default function Home() {
     }
   }
 
-  async function analyzeLead() {
+  async function analyzeLead(forceRefresh = false) {
     if (validation.status !== "valid") return;
 
     const version = ++requestVersion.current;
     activeRequest.current?.abort();
+    activeRequest.current = null;
+    const lead = validation.lead;
+    let cacheStatus: CompletedCacheStatus = forceRefresh ? "bypassed" : "miss";
+
+    if (!forceRefresh) {
+      setAnalysis({ status: "checking_cache" });
+      try {
+        const cached = await findCachedReport(lead);
+        if (version !== requestVersion.current) return;
+        if (cached) {
+          setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached });
+          return;
+        }
+      } catch {
+        cacheStatus = "unavailable";
+      }
+    }
+
+    if (version !== requestVersion.current) return;
     const controller = new AbortController();
     activeRequest.current = controller;
     let stage: AnalysisStage | "sending" = "sending";
-    setAnalysis({ status: "sending", stage });
+    setAnalysis({ status: "sending", stage, cacheStatus });
 
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(validation.lead),
+        body: JSON.stringify(lead),
         signal: controller.signal,
       });
       const data = await readAnalysis(response, (nextStage) => {
         stage = nextStage;
-        if (version === requestVersion.current) setAnalysis({ status: "sending", stage });
+        if (version === requestVersion.current) setAnalysis({ status: "sending", stage, cacheStatus });
       });
 
       if (version !== requestVersion.current) return;
-      setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result });
+      setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result, cacheStatus });
+      try {
+        await saveCachedReport(lead, data.result);
+      } catch {
+        if (version === requestVersion.current) {
+          setAnalysis({
+            status: "verified", leadId: data.lead_id, result: data.result, cacheStatus,
+            cacheWarning: "Не удалось сохранить отчёт в браузере. При следующей проверке потребуется новый запрос.",
+          });
+        }
+      }
     } catch (error) {
       if (version !== requestVersion.current) return;
       let message = "В приложении произошла ошибка при обработке проверки. Повторите попытку.";
@@ -90,7 +150,9 @@ export default function Home() {
         message = "Не удалось подключиться к серверу проверки. Проверьте соединение или попробуйте позже.";
       }
       if (error instanceof AnalysisRequestError) message = error.message;
-      setAnalysis({ status: "error", stage, message });
+      setAnalysis({ status: "error", stage, cacheStatus, message, wasRefresh: forceRefresh });
+    } finally {
+      if (activeRequest.current === controller) activeRequest.current = null;
     }
   }
 
@@ -123,11 +185,11 @@ export default function Home() {
             <div>
               <button
                 type="button"
-                disabled={validation.status !== "valid" || analysis.status === "sending"}
-                onClick={analyzeLead}
+                disabled={validation.status !== "valid" || analysis.status === "checking_cache" || analysis.status === "sending"}
+                onClick={() => analyzeLead(shouldRefresh(analysis))}
                 className="rounded-md bg-[#2855b8] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#21499f] disabled:cursor-not-allowed disabled:bg-[#aab5c6]"
               >
-                {analysis.status === "sending" ? "Проверяем..." : "Проверить лид"}
+                {getSubmitLabel(analysis)}
               </button>
             </div>
           </div>
@@ -135,12 +197,15 @@ export default function Home() {
           <ProcessStatus
             isValid={validation.status === "valid"}
             requestState={analysis.status}
+            cacheStatus={getCacheStatus(analysis)}
+            cachedAt={analysis.status === "cached" ? analysis.result.checked_at : undefined}
             stage={"stage" in analysis ? analysis.stage : undefined}
             error={analysis.status === "error" ? analysis.message : undefined}
+            notice={analysis.status === "verified" ? analysis.cacheWarning : undefined}
           />
         </div>
         <div className="mt-6 min-w-0 space-y-5">
-          {analysis.status === "verified" ? (
+          {analysis.status === "verified" || analysis.status === "cached" ? (
             <>
               <LeadResult result={analysis.result} />
               <CrmOutput leadId={analysis.leadId} result={analysis.result} />
