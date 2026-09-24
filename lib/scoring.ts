@@ -25,6 +25,7 @@ export type Assessment = z.infer<typeof assessmentSchema>;
 
 type Check = VerificationReport["checks"][number];
 type Criterion = Assessment["breakdown"][number];
+type ConfidenceCriterion = { label: string; points: number; max: number; reason: string };
 
 function findCheck(report: VerificationReport, id: Check["claim_id"]) {
   return report.checks.find((check) => check.claim_id === id);
@@ -39,6 +40,32 @@ function evidenceWeight(check: Check | undefined) {
 function confidenceWeight(check: Check | undefined) {
   if (check?.status === "partial_support") return 0.25;
   return evidenceWeight(check);
+}
+
+function confidenceReason(check: Check | undefined) {
+  if (check?.status === "confirmed") return "Официальный источник: 100% веса.";
+  if (check?.status === "source_claim") return "Сведение есть на странице, независимость не установлена: 50% веса.";
+  if (check?.status === "partial_support") return "Подтверждена только часть заявления: 25% веса.";
+  return "Пригодного текущего подтверждения нет: 0% веса.";
+}
+
+export function getConfidenceBreakdown(report: VerificationReport): ConfidenceCriterion[] {
+  const founder = findCheck(report, "founder");
+  const ceo = findCheck(report, "ceo");
+  const city = findCheck(report, "city");
+  const address = findCheck(report, "address");
+  const role = confidenceWeight(founder) >= confidenceWeight(ceo) ? founder : ceo;
+  const location = confidenceWeight(address) > confidenceWeight(city) ? address : city;
+  const criteria = [
+    { label: "Компания", max: 25, check: findCheck(report, "company") },
+    { label: "Деятельность", max: 25, check: findCheck(report, "activity") },
+    { label: "Связь человека с компанией", max: 20, check: findCheck(report, "person_link") },
+    { label: "Роль человека", max: 20, check: role },
+    { label: "Город или адрес", max: 10, check: location },
+  ];
+  return criteria.map(({ label, max, check }) => ({
+    label, max, points: max * confidenceWeight(check), reason: confidenceReason(check),
+  }));
 }
 
 function categoryPoints(quote: string, categories: { pattern: RegExp; points: number }[]) {
@@ -106,12 +133,8 @@ export function scoreLead(report: VerificationReport): Assessment {
   const breakdown = [identity, profile, candidateCriterion, authority, international];
   const score = breakdown.reduce((sum, item) => sum + item.points, 0);
 
-  const roleCoverage = Math.max(confidenceWeight(founder), confidenceWeight(ceo));
-  const coverage = Math.round(
-    confidenceWeight(company) * 25 + confidenceWeight(activity) * 25 +
-    confidenceWeight(person) * 20 + roleCoverage * 20 +
-    Math.max(confidenceWeight(city), confidenceWeight(address)) * 10,
-  );
+  const confidenceBreakdown = getConfidenceBreakdown(report);
+  const coverage = Math.round(confidenceBreakdown.reduce((sum, item) => sum + item.points, 0));
   const verificationConfidence = coverage;
   const companyKnown = evidenceWeight(company) > 0;
   const currentPerson = evidenceWeight(person) > 0;

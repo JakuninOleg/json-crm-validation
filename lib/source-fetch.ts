@@ -4,10 +4,14 @@ import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 
 export type PublicSource = { id: string; url: string; text: string };
-export type SourceResult = { url: string; source?: PublicSource; unavailable: boolean };
+export type SourceResult =
+  | { url: string; source: PublicSource; unavailable: false }
+  | { url: string; unavailable: true; reason: string };
 
 const MAX_BYTES = 400_000;
 const MAX_REDIRECTS = 3;
+
+class SourceReadError extends Error {}
 
 function publicIpv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -49,16 +53,18 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
   const url = new URL(address);
   if (!(["http:", "https:"].includes(url.protocol)) || url.username || url.password || url.port ||
       !url.hostname.includes(".") || isIP(url.hostname) || url.hostname.endsWith(".local")) {
-    throw new Error("Unsupported source URL");
+    throw new SourceReadError("Неподдерживаемый адрес страницы.");
   }
   let dnsTimer: ReturnType<typeof setTimeout> | undefined;
   const addresses = await Promise.race([
     lookup(url.hostname, { all: true, family: 4 }),
     new Promise<never>((_, reject) => {
-      dnsTimer = setTimeout(() => reject(new Error("Source DNS timeout")), 4_000);
+      dnsTimer = setTimeout(() => reject(new SourceReadError("Превышено время поиска адреса сайта.")), 4_000);
     }),
   ]).finally(() => clearTimeout(dnsTimer));
-  if (!addresses.length || addresses.some((entry) => !publicIpv4(entry.address))) throw new Error("Unsafe source address");
+  if (!addresses.length || addresses.some((entry) => !publicIpv4(entry.address))) {
+    throw new SourceReadError("Адрес сайта не прошёл проверку безопасности.");
+  }
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
 
   const response = await new Promise<{ status: number; location?: string; contentType?: string; body: string }>((resolve, reject) => {
@@ -75,7 +81,7 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
       let size = 0;
       res.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_BYTES) { req.destroy(new Error("Source too large")); return; }
+        if (size > MAX_BYTES) { req.destroy(new SourceReadError("Страница превышает лимит размера для чтения.")); return; }
         chunks.push(chunk);
       });
       res.on("end", () => resolve({
@@ -85,7 +91,7 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
         body: Buffer.concat(chunks).toString("utf8"),
       }));
     });
-    req.on("timeout", () => req.destroy(new Error("Source timeout")));
+    req.on("timeout", () => req.destroy(new SourceReadError("Превышено время ответа сайта.")));
     req.on("error", reject);
     req.end();
   });
@@ -93,10 +99,16 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
   if ([301, 302, 303, 307, 308].includes(response.status) && response.location && redirects < MAX_REDIRECTS) {
     return readPage(new URL(response.location, url).href, signal, redirects + 1);
   }
-  if (response.status !== 200 || !/text\/(?:html|plain)/i.test(response.contentType ?? "")) throw new Error("Source unavailable");
+  if (response.status !== 200) throw new SourceReadError(`Сервер вернул HTTP ${response.status}.`);
+  if (!/text\/(?:html|plain)/i.test(response.contentType ?? "")) {
+    throw new SourceReadError("Сервер не вернул читаемую HTML или текстовую страницу.");
+  }
   const text = /text\/html/i.test(response.contentType ?? "") ? pageText(response.body) : response.body.trim().slice(0, 30_000);
-  if (text.length < 100 || /(?:404\s*[-:]?\s*page not found|page not found|this page (?:does not exist|is not available))/i.test(text.slice(0, 500))) {
-    throw new Error("Empty or missing page");
+  if (text.length < 100) {
+    throw new SourceReadError("В ответе слишком мало текста. Возможно, браузер загружает содержимое через JavaScript.");
+  }
+  if (/(?:404\s*[-:]?\s*page not found|page not found|this page (?:does not exist|is not available))/i.test(text.slice(0, 500))) {
+    throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
   }
   return { url: url.href, text };
 }
@@ -107,9 +119,12 @@ export async function fetchPublicSources(urls: string[], signal: AbortSignal): P
     try {
       const page = await readPage(url, signal);
       return { url, source: { id: `s${index + 1}`, url: page.url, text: page.text }, unavailable: false };
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      return { url, unavailable: true };
+      const reason = error instanceof SourceReadError
+        ? error.message
+        : "Сервер проверки не смог получить страницу. Возможны ограничения сети или сайта.";
+      return { url, unavailable: true, reason };
     }
   }));
 }

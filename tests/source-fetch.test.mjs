@@ -6,3 +6,9 @@ test("Отменённая загрузка страниц не превраща
   const signal = AbortSignal.abort(new Error("cancelled"));
   await assert.rejects(fetchPublicSources([], signal), /cancelled/);
 });
+
+test("Неподдерживаемый адрес возвращает конкретную причину без запроса в сеть", async () => {
+  const [result] = await fetchPublicSources(["http://localhost/"], new AbortController().signal);
+  assert.equal(result.unavailable, true);
+  assert.match(result.reason, /Неподдерживаемый адрес/);
+});

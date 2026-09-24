@@ -115,13 +115,14 @@ export async function analyzeLead(lead: Lead, onProgress: (stage: AnalysisStage)
   onProgress("fetching");
   const fetched = await fetchPublicSources(selectSearchSources(search, lead), signal);
   signal.throwIfAborted();
-  const sources = fetched.flatMap((item) => item.source ? [item.source] : []);
-  const unavailable = fetched.filter((item) => item.unavailable).map((item) => item.url);
+  const sources = fetched.flatMap((item) => item.unavailable ? [] : [item.source]);
+  const failures = fetched.flatMap((item) => item.unavailable ? [{ url: item.url, reason: item.reason }] : []);
+  const unavailable = failures.map((item) => item.url);
   let evidence: Awaited<ReturnType<typeof extractEvidence>> = [];
   onProgress("analyzing");
   if (sources.length) evidence = await extractEvidence(client, lead, sources, signal);
   onProgress("validating");
-  const report = buildVerificationReport(lead, sources, unavailable, evidence);
+  const report = buildVerificationReport(lead, sources, unavailable, evidence, failures);
   onProgress("scoring");
   const result = analysisResultSchema.safeParse({ ...report, assessment: scoreLead(report) });
   signal.throwIfAborted();

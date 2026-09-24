@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { scoreLead } from "../lib/scoring.ts";
+import { getConfidenceBreakdown, scoreLead } from "../lib/scoring.ts";
 import { buildVerificationReport } from "../lib/verification.ts";
 
 const lead = {
@@ -63,6 +63,9 @@ test("Совпадения компании и города дают баллы 
   const assessment = scoreLead(report);
   assert.equal(assessment.score, 11);
   assert.equal(assessment.verification_confidence, 18);
+  const confidence = getConfidenceBreakdown(report);
+  assert.deepEqual(confidence.map(({ points }) => points), [12.5, 0, 0, 0, 5]);
+  assert.equal(Math.round(confidence.reduce((sum, item) => sum + item.points, 0)), assessment.verification_confidence);
   assert.equal(assessment.qualification, "COLD");
   assert.equal(assessment.review_required, true);
 });

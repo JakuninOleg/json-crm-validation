@@ -31,6 +31,7 @@ export const verificationReportSchema = z.object({
   })),
   sources: z.array(z.url()),
   unavailable_sources: z.array(z.url()),
+  source_failures: z.array(z.object({ url: z.url(), reason: z.string() })).default([]),
 });
 export type VerificationReport = z.infer<typeof verificationReportSchema>;
 
@@ -98,6 +99,7 @@ export function buildVerificationReport(
   sources: PublicSource[],
   unavailableSources: string[],
   evidence: ModelEvidence[],
+  sourceFailures: { url: string; reason: string }[] = [],
 ): VerificationReport {
   const accepted = evidence.flatMap((item) => {
     const source = sources.find((candidate) => candidate.id === item.source_id);
@@ -150,6 +152,6 @@ export function buildVerificationReport(
   const hasCurrentEvidence = checks.some((check) => ["confirmed", "source_claim"].includes(check.status));
   return {
     checked_at: new Date().toISOString(), status: hasCurrentEvidence ? "checked" : "insufficient_evidence",
-    checks, sources: [...usedSources], unavailable_sources: unavailableSources,
+    checks, sources: [...usedSources], unavailable_sources: unavailableSources, source_failures: sourceFailures,
   };
 }
