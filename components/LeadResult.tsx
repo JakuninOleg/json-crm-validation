@@ -45,6 +45,8 @@ export function LeadResult({ result }: LeadResultProps) {
   const assessment = result.assessment;
   const qualification = assessment.qualification;
   const confidenceBreakdown = getConfidenceBreakdown(result);
+  const processedCandidates = result.source_candidates.filter((candidate) => candidate.status !== "not_read");
+  const skippedCandidates = result.source_candidates.filter((candidate) => candidate.status === "not_read");
 
   return (
     <section className="min-w-0 rounded-xl border border-[#dfe3e9] bg-white px-5 py-5 shadow-[0_1px_2px_rgba(20,26,40,0.04)]">
@@ -144,7 +146,7 @@ export function LeadResult({ result }: LeadResultProps) {
             Состав поисковой выдачи может меняться. Сервер читает до 10 страниц, из них до шести передаёт на анализ. Ссылка сама по себе не подтверждает сведения из заявки.
           </p>
           <ul className="mt-2 space-y-2">
-            {result.source_candidates.map((candidate) => (
+            {processedCandidates.map((candidate) => (
               <li key={candidate.url} className="text-xs">
                 <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-[#2855b8] underline">{candidate.url}</a>
                 <p className="mt-0.5 text-[#667283]">
@@ -155,6 +157,20 @@ export function LeadResult({ result }: LeadResultProps) {
               </li>
             ))}
           </ul>
+          {skippedCandidates.length > 0 && (
+            <details className="mt-3 text-xs text-[#667283]">
+              <summary className="cursor-pointer font-medium text-[#303846]">
+                Остальные ссылки ({skippedCandidates.length}): не проверялись из-за лимита
+              </summary>
+              <ul className="mt-2 space-y-1 pl-4">
+                {skippedCandidates.map((candidate) => (
+                  <li key={candidate.url}>
+                    <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-[#2855b8] underline">{candidate.url}</a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
