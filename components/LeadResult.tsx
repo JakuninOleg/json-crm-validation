@@ -33,10 +33,10 @@ const statusStyles = {
 
 const sourceStatusLabels = {
   used: "Использована в выводах",
-  read_no_evidence: "Прочитана, но пригодной цитаты, связывающей страницу с лидом, нет",
+  read_no_evidence: "Страница прочитана, но предложенная цитата не прошла проверку",
   read_not_analyzed: "Прочитана, но не вошла в анализ в сохранённом отчёте",
   fetch_failed: "Сервер не смог прочитать страницу",
-  not_read: "Не прочитана в этом запуске",
+  not_read: "Найдена поиском, но цитата для проверки не предложена",
 } satisfies Record<AnalysisResult["source_candidates"][number]["status"], string>;
 
 export function LeadResult({ result }: LeadResultProps) {
@@ -143,7 +143,7 @@ export function LeadResult({ result }: LeadResultProps) {
         <div className="mt-5 border-t border-[#e7e9ee] pt-4">
           <h3 className="text-sm font-semibold text-[#303846]">Как обработаны найденные ссылки</h3>
           <p className="mt-1 text-xs leading-5 text-[#667283]">
-            Состав поисковой выдачи может меняться. Сервер пытается прочитать все найденные ссылки и анализирует доступный текст пакетами. Ссылка сама по себе не подтверждает сведения из заявки.
+            Состав поисковой выдачи может меняться. Модель предлагает точные цитаты и ссылки; сервер проверяет эти страницы. Остальные найденные ссылки показаны для ручного просмотра. Ссылка сама по себе не подтверждает сведения из заявки.
           </p>
           <ul className="mt-2 space-y-2">
             {processedCandidates.map((candidate) => (
@@ -160,7 +160,7 @@ export function LeadResult({ result }: LeadResultProps) {
           {skippedCandidates.length > 0 && (
             <details className="mt-3 text-xs text-[#667283]">
               <summary className="cursor-pointer font-medium text-[#303846]">
-                Остальные ссылки ({skippedCandidates.length}): не прочитаны в этом запуске
+                Остальные ссылки ({skippedCandidates.length}): цитата не предложена
               </summary>
               <ul className="mt-2 space-y-1 pl-4">
                 {skippedCandidates.map((candidate) => (

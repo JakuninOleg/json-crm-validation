@@ -17,6 +17,16 @@ export const modelEvidenceSchema = z.object({
 });
 export type ModelEvidence = z.infer<typeof modelEvidenceSchema>["evidence"][number];
 
+export const evidenceProposalSchema = z.object({
+  evidence: z.array(z.object({
+    claim_id: claimIdSchema,
+    verdict: z.enum(["supports_current", "historical", "contradicts"]),
+    url: z.string(),
+    quote: z.string(),
+  })),
+});
+export type EvidenceProposal = z.infer<typeof evidenceProposalSchema>["evidence"][number];
+
 export const verificationReportSchema = z.object({
   checked_at: z.string(),
   status: z.enum(["checked", "insufficient_evidence"]),
@@ -56,10 +66,16 @@ function normalize(value: string) {
   return value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
+function quoteIsOnPage(page: string, quote: string) {
+  const compact = (value: string) => value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+  return compact(page).includes(compact(quote));
+}
+
 function quotedEntityMatches(lead: Lead, claimId: ClaimId, quote: string) {
   const normalizedQuote = normalize(quote);
-  const companyWords = normalize(lead.company_name).split(" ").filter((word) => word.length > 2 && !["limited", "ltd", "inc", "llc"].includes(word));
-  if (companyWords.length < 2 || !companyWords.slice(0, 2).every((word) => normalizedQuote.includes(word))) return false;
+  const companyWords = normalize(lead.company_name).split(" ").filter((word) => !["limited", "ltd", "inc", "llc"].includes(word));
+  const companyName = companyWords.join(" ");
+  if (companyWords.length < 2 || !` ${normalizedQuote} `.includes(` ${companyName} `)) return false;
   if (["person_link", "founder", "ceo"].includes(claimId)) {
     const personName = normalize(lead.name);
     if (personName.split(" ").length < 2 || !` ${normalizedQuote} `.includes(` ${personName} `)) return false;
@@ -109,7 +125,7 @@ export function buildVerificationReport(
   const accepted = evidence.flatMap((item) => {
     const source = sources.find((candidate) => candidate.id === item.source_id);
     if (!source || isDiscussionSource(source.url) || item.quote.length < 12 || item.quote.length > 600) return [];
-    if (!normalize(source.text).includes(normalize(item.quote))) return [];
+    if (!quoteIsOnPage(source.text, item.quote)) return [];
     if (!quotedEntityMatches(lead, item.claim_id, item.quote)) return [];
     const verdict = item.verdict === "supports_current" && isArchiveSource(source.url) ? "historical" : item.verdict;
     return [{ ...item, verdict, url: source.url, official: isOfficialSource(source.url) }];

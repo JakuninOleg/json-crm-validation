@@ -4,10 +4,12 @@ import type { AnalysisResult, Lead } from "@/lib/schemas";
 
 const databaseName = "worrki-lead-check";
 const storeName = "reports";
+const pipelineVersion = 2;
 
 const cachedReportSchema = z.object({
   key: z.string(),
   lead_id: z.number().int().positive(),
+  pipeline_version: z.number().int().optional(),
   result: analysisResultSchema,
 });
 
@@ -35,7 +37,7 @@ function openCache(): Promise<IDBDatabase> {
   });
 }
 
-export async function findCachedReport(lead: Lead): Promise<AnalysisResult | null> {
+export async function findCachedReport(lead: Lead): Promise<{ result: AnalysisResult; isCurrent: boolean } | null> {
   const database = await openCache();
   try {
     const stored = await new Promise<unknown>((resolve, reject) => {
@@ -46,7 +48,7 @@ export async function findCachedReport(lead: Lead): Promise<AnalysisResult | nul
     const parsed = cachedReportSchema.safeParse(stored);
     if (!parsed.success || parsed.data.lead_id !== lead.lead_id) return null;
     if (Number.isNaN(Date.parse(parsed.data.result.checked_at))) return null;
-    return parsed.data.result;
+    return { result: parsed.data.result, isCurrent: parsed.data.pipeline_version === pipelineVersion };
   } finally {
     database.close();
   }
@@ -57,7 +59,7 @@ export async function saveCachedReport(lead: Lead, result: AnalysisResult): Prom
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).put({ key: leadCacheKey(lead), lead_id: lead.lead_id, result });
+      transaction.objectStore(storeName).put({ key: leadCacheKey(lead), lead_id: lead.lead_id, pipeline_version: pipelineVersion, result });
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);

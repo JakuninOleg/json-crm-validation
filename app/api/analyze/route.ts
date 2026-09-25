@@ -2,6 +2,7 @@ import { describeAnalysisError } from "@/lib/analysis-errors";
 import { analyzeLead } from "@/lib/openai";
 import { describeLeadIssue, leadSchema } from "@/lib/schemas";
 import type { AnalysisEvent, AnalysisStage } from "@/lib/schemas";
+import { evidenceProposalSchema } from "@/lib/verification";
 import { z } from "zod";
 
 export const maxDuration = 300;
@@ -9,6 +10,7 @@ export const maxDuration = 300;
 const refreshedRequestSchema = z.object({
   lead: leadSchema,
   previous_sources: z.array(z.url()).max(200),
+  previous_evidence: evidenceProposalSchema.shape.evidence.element.extend({ url: z.url() }).array().max(30).default([]),
 });
 
 export async function POST(request: Request) {
@@ -64,7 +66,9 @@ export async function POST(request: Request) {
         const result = await analyzeLead(lead.data, (nextStage) => {
           stage = nextStage;
           send({ status: "progress", stage });
-        }, signal, refreshedRequest.success ? refreshedRequest.data.previous_sources : []);
+        }, signal,
+        refreshedRequest.success ? refreshedRequest.data.previous_sources : [],
+        refreshedRequest.success ? refreshedRequest.data.previous_evidence : []);
         send({ status: "verified", lead_id: lead.data.lead_id, result });
       } catch (error) {
         // Log only diagnostic fields. Provider messages may contain request data.

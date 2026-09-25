@@ -31,7 +31,7 @@ export function CrmOutput({ leadId, result }: CrmOutputProps) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e7e9ee] px-5 py-4">
         <div>
           <h2 className="font-mono text-sm font-semibold tracking-tight text-[#2b3342]">CRM OUTPUT</h2>
-          <p className="mt-1 text-sm text-[#747d8c]">Данные для CRM. Отправка не выполняется.</p>
+          <p className="mt-1 text-sm text-[#747d8c]">Подготовленные данные лида</p>
         </div>
         <button
           type="button"

@@ -9,6 +9,7 @@ import type { CacheStatus, RequestState } from "@/components/ProcessStatus";
 import { AnalysisRequestError, readAnalysis } from "@/lib/analyze-stream";
 import { exampleLead } from "@/lib/example-lead";
 import { findCachedReport, saveCachedReport } from "@/lib/lead-cache";
+import { previousEvidenceFromResult, shouldKeepPreviousReport } from "@/lib/report-history";
 import { validateLeadJson } from "@/lib/schemas";
 import type { AnalysisStage } from "@/lib/schemas";
 import type { AnalysisResult } from "@/lib/schemas";
@@ -21,6 +22,7 @@ type AnalysisState =
   | { status: "cached"; leadId: number; result: AnalysisResult }
   | { status: "sending"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus }
   | { status: "verified"; leadId: number; result: AnalysisResult; cacheStatus: CompletedCacheStatus; cacheWarning?: string }
+  | { status: "historical"; leadId: number; result: AnalysisResult; attempt?: AnalysisResult; cacheStatus: CompletedCacheStatus; message: string; stage: AnalysisStage | "sending" }
   | { status: "error"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus; message: string; wasRefresh: boolean };
 
 function getCacheStatus(analysis: AnalysisState): CacheStatus {
@@ -30,15 +32,20 @@ function getCacheStatus(analysis: AnalysisState): CacheStatus {
   return analysis.cacheStatus;
 }
 
+function getProcessRequestState(analysis: AnalysisState): RequestState {
+  if (analysis.status !== "historical") return analysis.status;
+  return analysis.attempt ? "verified" : "error";
+}
+
 function getSubmitLabel(analysis: AnalysisState) {
   if (analysis.status === "checking_cache" || analysis.status === "sending") return "Проверяем...";
-  if (analysis.status === "cached" || analysis.status === "verified") return "Выполнить проверку заново";
+  if (analysis.status === "cached" || analysis.status === "verified" || analysis.status === "historical") return "Выполнить проверку заново";
   if (analysis.status === "error" && analysis.wasRefresh) return "Повторить проверку заново";
   return "Проверить лид";
 }
 
 function shouldRefresh(analysis: AnalysisState) {
-  if (analysis.status === "cached" || analysis.status === "verified") return true;
+  if (analysis.status === "cached" || analysis.status === "verified" || analysis.status === "historical") return true;
   return analysis.status === "error" && analysis.wasRefresh;
 }
 
@@ -72,7 +79,7 @@ export default function Home() {
     activeRequest.current?.abort();
   }, []);
   const validation = useMemo(() => validateLeadJson(input), [input]);
-  const resultContent = getResultContent(analysis.status);
+  const resultContent = getResultContent(analysis.status === "historical" ? "cached" : analysis.status);
 
   function updateInput(value: string) {
     activeRequest.current?.abort();
@@ -100,28 +107,21 @@ export default function Home() {
     let cacheStatus: CompletedCacheStatus = forceRefresh ? "bypassed" : "miss";
     let previousSources: string[] = [];
     let refreshPrevious = forceRefresh;
+    let previousReport: AnalysisResult | null = null;
 
     setAnalysis({ status: "checking_cache" });
     try {
       const cached = await findCachedReport(lead);
       if (version !== requestVersion.current) return;
       if (cached) {
-        const incompletePrevious = cached.source_candidates.some(
-          (candidate) => candidate.status === "not_read" || candidate.status === "read_not_analyzed",
-        );
-        if (!forceRefresh && !incompletePrevious) {
-          setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached });
+        previousReport = cached.result;
+        if (!forceRefresh && cached.isCurrent) {
+          setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached.result });
           return;
         }
         refreshPrevious = true;
         cacheStatus = "bypassed";
-        const previouslyUsed = cached.source_candidates.filter((candidate) => candidate.status === "used");
-        const previouslyRead = cached.source_candidates.filter((candidate) => candidate.status !== "not_read" && candidate.status !== "used");
-        const notRead = cached.source_candidates.filter((candidate) => candidate.status === "not_read");
-        const knownUrls = cached.source_candidates.length
-          ? [...previouslyUsed, ...previouslyRead, ...notRead].map((candidate) => candidate.url)
-          : [...cached.sources, ...cached.unavailable_sources];
-        previousSources = [...new Set(knownUrls)];
+        previousSources = [...new Set(previousEvidenceFromResult(cached.result).map((item) => item.url))];
       }
     } catch {
       cacheStatus = "unavailable";
@@ -137,7 +137,10 @@ export default function Home() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(refreshPrevious ? { lead, previous_sources: previousSources } : lead),
+        body: JSON.stringify(refreshPrevious ? {
+          lead, previous_sources: previousSources,
+          previous_evidence: previousReport ? previousEvidenceFromResult(previousReport) : [],
+        } : lead),
         signal: controller.signal,
       });
       const data = await readAnalysis(response, (nextStage) => {
@@ -146,6 +149,13 @@ export default function Home() {
       });
 
       if (version !== requestVersion.current) return;
+      if (previousReport && shouldKeepPreviousReport(previousReport, data.result)) {
+        setAnalysis({
+          status: "historical", leadId: lead.lead_id, result: previousReport, attempt: data.result,
+          cacheStatus, stage, message: "Новая проверка не подтвердила часть прежних сведений. Прошлый отчёт сохранён как исторический; его оценку нельзя считать актуальной без ручной проверки.",
+        });
+        return;
+      }
       setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result, cacheStatus });
       try {
         await saveCachedReport(lead, data.result);
@@ -164,7 +174,14 @@ export default function Home() {
         message = "Не удалось подключиться к серверу проверки. Проверьте соединение или попробуйте позже.";
       }
       if (error instanceof AnalysisRequestError) message = error.message;
-      setAnalysis({ status: "error", stage, cacheStatus, message, wasRefresh: refreshPrevious });
+      if (previousReport) {
+        setAnalysis({
+          status: "historical", leadId: lead.lead_id, result: previousReport, cacheStatus, stage,
+          message: `${message} Ниже сохранён прежний отчёт; актуальность его выводов не установлена.`,
+        });
+      } else {
+        setAnalysis({ status: "error", stage, cacheStatus, message, wasRefresh: refreshPrevious });
+      }
     } finally {
       if (activeRequest.current === controller) activeRequest.current = null;
     }
@@ -210,19 +227,26 @@ export default function Home() {
 
           <ProcessStatus
             isValid={validation.status === "valid"}
-            requestState={analysis.status}
+            requestState={getProcessRequestState(analysis)}
             cacheStatus={getCacheStatus(analysis)}
             cachedAt={analysis.status === "cached" ? analysis.result.checked_at : undefined}
             stage={"stage" in analysis ? analysis.stage : undefined}
-            error={analysis.status === "error" ? analysis.message : undefined}
+            error={analysis.status === "error" || analysis.status === "historical" ? analysis.message : undefined}
             notice={analysis.status === "verified" ? analysis.cacheWarning : undefined}
           />
         </div>
         <div className="mt-6 min-w-0 space-y-5">
-          {analysis.status === "verified" || analysis.status === "cached" ? (
+          {analysis.status === "verified" || analysis.status === "cached" || analysis.status === "historical" ? (
             <>
+              {analysis.status === "historical" && (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950">
+                  <p className="font-semibold">Текущая проверка не завершилась подтверждённой оценкой</p>
+                  <p className="mt-1">{analysis.message}</p>
+                  {analysis.attempt && <p className="mt-1">Новый прогон: {analysis.attempt.assessment.score}/100, {analysis.attempt.assessment.qualification}; прежний отчёт: {analysis.result.assessment.score}/100, {analysis.result.assessment.qualification}.</p>}
+                </div>
+              )}
               <LeadResult result={analysis.result} />
-              <CrmOutput leadId={analysis.leadId} result={analysis.result} />
+              {analysis.status !== "historical" && <CrmOutput leadId={analysis.leadId} result={analysis.result} />}
             </>
           ) : (
             <section className="rounded-xl border border-dashed border-[#d6dce4] bg-[#fbfcfd] px-6 py-8">

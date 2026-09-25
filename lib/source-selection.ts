@@ -3,7 +3,7 @@ import type { Lead } from "@/lib/schemas";
 
 export type SourceCandidate = { url: string; origin: "search" | "previous" | "both" };
 
-function normalizeUrl(value: string): string | null {
+export function normalizeUrl(value: string): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
@@ -49,19 +49,20 @@ function searchUrls(response: Response) {
   return { found, cited };
 }
 
-export function selectSourceCandidates(response: Response, lead: Lead, previousUrls: string[]) {
+export function selectSourceCandidates(response: Response, lead: Lead, previousUrls: string[], citedUrls: string[] = []) {
   const { found, cited } = searchUrls(response);
   const previous = new Set(previousUrls.map(normalizeUrl).filter((url): url is string => Boolean(url)));
+  const toVerify = new Set(citedUrls.map(normalizeUrl).filter((url): url is string => Boolean(url)));
   const words = lead.company_name.toLowerCase().split(/\W+/).filter((word) => word.length > 3);
   const ranked = [...found].sort((left, right) => {
     const relevance = (url: string) => words.filter((word) => url.toLowerCase().includes(word)).length;
     return relevance(right) - relevance(left) || left.localeCompare(right);
   });
-  const ordered = [...new Set([...previous, ...cited, ...ranked])];
+  const ordered = [...new Set([...previous, ...toVerify, ...cited, ...ranked])];
   const candidates: SourceCandidate[] = ordered.map((url) => {
     let origin: SourceCandidate["origin"] = "search";
     if (previous.has(url)) origin = found.has(url) ? "both" : "previous";
     return { url, origin };
   });
-  return { candidates, toFetch: ordered };
+  return { candidates, toFetch: ordered.filter((url) => toVerify.has(url)) };
 }

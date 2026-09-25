@@ -43,11 +43,24 @@ test("Цитата должна буквально присутствовать 
   assert.equal(check(buildVerificationReport(lead, sources, [], [{ claim_id: "ceo", verdict: "supports_current", source_id: "s1", quote }]), "ceo").status, "source_claim");
 });
 
+test("Цитата с изменённой пунктуацией не принимается как дословная", () => {
+  const source = { id: "s1", url: "https://company.example/about", text: "On-Line Dynamics Limited operates in Ibadan, Nigeria." };
+  const evidence = [{ claim_id: "company", verdict: "supports_current", source_id: "s1", quote: "On-Line Dynamics Limited operates in Ibadan: Nigeria." }];
+  assert.equal(check(buildVerificationReport(lead, [source], [], evidence), "company").status, "no_public_confirmation");
+});
+
 test("Сокращённое или изменённое имя не считается точным совпадением человека", () => {
   const quote = "WALE OYINLOLA-MICHAEL is CEO at ON-LINE DYNAMICS LIMITED.";
   const sources = [{ id: "s1", url: "https://company.example/team", text: quote }];
   const evidence = [{ claim_id: "ceo", verdict: "supports_current", source_id: "s1", quote }];
   assert.equal(check(buildVerificationReport(lead, sources, [], evidence), "ceo").status, "no_public_confirmation");
+});
+
+test("Похожее название Online Dynamics не считается компанией On-Line Dynamics Limited", () => {
+  const quote = "Online Dynamics is located at Adepate Abebi Crescent in Ibadan.";
+  const source = { id: "s1", url: "https://directory.example/ibadan", text: quote };
+  const evidence = [{ claim_id: "city", verdict: "supports_current", source_id: "s1", quote }];
+  assert.equal(check(buildVerificationReport(lead, [source], [], evidence), "city").status, "no_public_confirmation");
 });
 
 test("Одна подтверждённая услуга не подтверждает весь заявленный список", () => {

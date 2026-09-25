@@ -10,26 +10,9 @@ export type SourceResult =
 
 const MAX_BYTES = 8_000_000;
 const MAX_REDIRECTS = 3;
-const MAX_SOURCE_TEXT = 250_000;
 const FETCH_CONCURRENCY = 8;
-const CHUNK_SIZE = 12_000;
-const CHUNK_OVERLAP = 600;
 
 export class SourceReadError extends Error {}
-
-export function sourceChunks(sources: PublicSource[]): PublicSource[] {
-  const chunks: PublicSource[] = [];
-  for (const source of sources) {
-    let start = 0;
-    while (start < source.text.length) {
-      const end = Math.min(start + CHUNK_SIZE, source.text.length);
-      chunks.push({ ...source, text: source.text.slice(start, end) });
-      if (end === source.text.length) break;
-      start = end - CHUNK_OVERLAP;
-    }
-  }
-  return chunks;
-}
 
 function publicIpv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -172,9 +155,6 @@ async function readPage(address: string, signal: AbortSignal): Promise<{ url: st
   if (text.length < 12) throw new SourceReadError("В документе слишком мало доступного текста.");
   if (isMissingPage(text)) {
     throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
-  }
-  if (text.length > MAX_SOURCE_TEXT) {
-    throw new SourceReadError("Текст документа превышает лимит безопасной обработки.");
   }
   return { url: response.url, text };
 }
