@@ -159,6 +159,12 @@ export function scoreLead(report: VerificationReport): Assessment {
 
   const riskSignals = report.checks.filter((check) => ["contradicted", "conflict"].includes(check.status))
     .map((check) => `${check.claim}: ${check.detail}`);
+  for (const check of report.checks.filter((item) => item.status === "identity_ambiguous")) {
+    riskSignals.push(`${check.claim}: ${check.detail}`);
+  }
+  for (const discrepancy of report.source_discrepancies) {
+    riskSignals.push(`Связь дополнительной страницы с компанией не установлена: ${discrepancy.detail}`);
+  }
   if (!companyKnown) riskSignals.push("Компания не подтверждена пригодным источником.");
   if (!currentPerson) riskSignals.push("Связь человека с компанией не подтверждена.");
   if (!currentRole) riskSignals.push("Текущие полномочия человека не подтверждены.");

@@ -21,7 +21,7 @@ type AnalysisState =
   | { status: "checking_cache" }
   | { status: "cached"; leadId: number; result: AnalysisResult }
   | { status: "sending"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus }
-  | { status: "verified"; leadId: number; result: AnalysisResult; cacheStatus: CompletedCacheStatus; cacheWarning?: string }
+  | { status: "verified"; leadId: number; result: AnalysisResult; cacheStatus: CompletedCacheStatus; previous?: AnalysisResult; previousAlgorithmChanged?: boolean; cacheWarning?: string }
   | { status: "historical"; leadId: number; result: AnalysisResult; attempt?: AnalysisResult; cacheStatus: CompletedCacheStatus; message: string; stage: AnalysisStage | "sending" }
   | { status: "error"; stage: AnalysisStage | "sending"; cacheStatus: CompletedCacheStatus; message: string; wasRefresh: boolean };
 
@@ -108,6 +108,7 @@ export default function Home() {
     let previousSources: string[] = [];
     let refreshPrevious = forceRefresh;
     let previousReport: AnalysisResult | null = null;
+    let previousIsCurrent = false;
 
     setAnalysis({ status: "checking_cache" });
     try {
@@ -115,13 +116,16 @@ export default function Home() {
       if (version !== requestVersion.current) return;
       if (cached) {
         previousReport = cached.result;
+        previousIsCurrent = cached.isCurrent;
         if (!forceRefresh && cached.isCurrent) {
           setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached.result });
           return;
         }
         refreshPrevious = true;
         cacheStatus = "bypassed";
-        previousSources = [...new Set(previousEvidenceFromResult(cached.result).map((item) => item.url))];
+        if (cached.isCurrent) {
+          previousSources = [...new Set(previousEvidenceFromResult(cached.result).map((item) => item.url))];
+        }
       }
     } catch {
       cacheStatus = "unavailable";
@@ -139,7 +143,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(refreshPrevious ? {
           lead, previous_sources: previousSources,
-          previous_evidence: previousReport ? previousEvidenceFromResult(previousReport) : [],
+          previous_evidence: previousReport && previousIsCurrent ? previousEvidenceFromResult(previousReport) : [],
         } : lead),
         signal: controller.signal,
       });
@@ -149,20 +153,22 @@ export default function Home() {
       });
 
       if (version !== requestVersion.current) return;
-      if (previousReport && shouldKeepPreviousReport(previousReport, data.result)) {
+      if (previousReport && previousIsCurrent && shouldKeepPreviousReport(previousReport, data.result)) {
         setAnalysis({
           status: "historical", leadId: lead.lead_id, result: previousReport, attempt: data.result,
           cacheStatus, stage, message: "Новая проверка не подтвердила часть прежних сведений. Прошлый отчёт сохранён как исторический; его оценку нельзя считать актуальной без ручной проверки.",
         });
         return;
       }
-      setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result, cacheStatus });
+      setAnalysis({ status: "verified", leadId: data.lead_id, result: data.result, cacheStatus,
+        previous: previousReport ?? undefined, previousAlgorithmChanged: Boolean(previousReport && !previousIsCurrent) });
       try {
         await saveCachedReport(lead, data.result);
       } catch {
         if (version === requestVersion.current) {
           setAnalysis({
             status: "verified", leadId: data.lead_id, result: data.result, cacheStatus,
+            previous: previousReport ?? undefined, previousAlgorithmChanged: Boolean(previousReport && !previousIsCurrent),
             cacheWarning: "Не удалось сохранить отчёт в браузере. При следующей проверке потребуется новый запрос.",
           });
         }
@@ -245,7 +251,9 @@ export default function Home() {
                   {analysis.attempt && <p className="mt-1">Новый прогон: {analysis.attempt.assessment.score}/100, {analysis.attempt.assessment.qualification}; прежний отчёт: {analysis.result.assessment.score}/100, {analysis.result.assessment.qualification}.</p>}
                 </div>
               )}
-              <LeadResult result={analysis.result} />
+              <LeadResult result={analysis.result}
+                previous={analysis.status === "verified" ? analysis.previous : undefined}
+                previousAlgorithmChanged={analysis.status === "verified" ? analysis.previousAlgorithmChanged : undefined} />
               {analysis.status !== "historical" && <CrmOutput leadId={analysis.leadId} result={analysis.result} />}
             </>
           ) : (

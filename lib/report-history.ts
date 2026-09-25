@@ -20,6 +20,21 @@ export function shouldKeepPreviousReport(previous: AnalysisResult, current: Anal
   if (current.checks.some((check) => check.status === "contradicted" || check.status === "conflict")) return false;
   return previous.checks.some((before) => {
     const after = current.checks.find((check) => check.claim_id === before.claim_id);
-    return supportedStatuses.has(before.status) && after?.status === "no_public_confirmation";
+    return supportedStatuses.has(before.status) &&
+      (after?.status === "no_public_confirmation" || after?.status === "identity_ambiguous");
   });
+}
+
+export function compareReports(previous: AnalysisResult, current: AnalysisResult) {
+  const scoreChanges = current.assessment.breakdown.flatMap((item) => {
+    const before = previous.assessment.breakdown.find((entry) => entry.name === item.name);
+    const difference = item.points - (before?.points ?? 0);
+    return difference ? [{ label: item.label, difference }] : [];
+  });
+  const evidenceChanges = current.checks.flatMap((item) => {
+    const before = previous.checks.find((entry) => entry.claim_id === item.claim_id);
+    if (!before || (before.status === item.status && before.source_url === item.source_url)) return [];
+    return [{ label: item.claim, before: before.status, after: item.status, source_url: item.source_url }];
+  });
+  return { scoreChanges, evidenceChanges };
 }

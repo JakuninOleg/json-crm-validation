@@ -1,7 +1,8 @@
 import type { AnalysisResult } from "@/lib/schemas";
 import { getConfidenceBreakdown } from "@/lib/scoring";
+import { compareReports } from "@/lib/report-history";
 
-type LeadResultProps = { result: AnalysisResult };
+type LeadResultProps = { result: AnalysisResult; previous?: AnalysisResult; previousAlgorithmChanged?: boolean };
 
 const qualificationStyles = {
   HOT: "bg-emerald-100 text-emerald-800",
@@ -16,6 +17,7 @@ const statusLabels = {
   historical: "Найдено только историческое упоминание",
   contradicted: "Найдено противоречие",
   conflict: "Источники противоречат друг другу",
+  identity_ambiguous: "Связь источника с компанией не установлена",
   no_public_confirmation: "Публичного подтверждения не найдено",
   not_provided: "Не заявлено",
 } satisfies Record<AnalysisResult["checks"][number]["status"], string>;
@@ -27,19 +29,20 @@ const statusStyles = {
   historical: "text-amber-700",
   contradicted: "text-red-700",
   conflict: "text-red-700",
+  identity_ambiguous: "text-amber-700",
   no_public_confirmation: "text-[#7f8997]",
   not_provided: "text-[#7f8997]",
 } satisfies Record<AnalysisResult["checks"][number]["status"], string>;
 
 const sourceStatusLabels = {
   used: "Использована в выводах",
-  read_no_evidence: "Страница прочитана, но предложенная цитата не прошла проверку",
+  read_no_evidence: "Страница прочитана, но сведения не приняты как доказательство",
   read_not_analyzed: "Прочитана, но не вошла в анализ в сохранённом отчёте",
   fetch_failed: "Сервер не смог прочитать страницу",
   not_read: "Найдена поиском, но цитата для проверки не предложена",
 } satisfies Record<AnalysisResult["source_candidates"][number]["status"], string>;
 
-export function LeadResult({ result }: LeadResultProps) {
+export function LeadResult({ result, previous, previousAlgorithmChanged = false }: LeadResultProps) {
   const checkedAt = new Date(result.checked_at).toLocaleString("ru-RU");
   const insufficient = result.status === "insufficient_evidence";
   const assessment = result.assessment;
@@ -47,6 +50,7 @@ export function LeadResult({ result }: LeadResultProps) {
   const confidenceBreakdown = getConfidenceBreakdown(result);
   const processedCandidates = result.source_candidates.filter((candidate) => candidate.status !== "not_read");
   const skippedCandidates = result.source_candidates.filter((candidate) => candidate.status === "not_read");
+  const comparison = previous ? compareReports(previous, result) : null;
 
   return (
     <section className="min-w-0 rounded-xl border border-[#dfe3e9] bg-white px-5 py-5 shadow-[0_1px_2px_rgba(20,26,40,0.04)]">
@@ -72,6 +76,33 @@ export function LeadResult({ result }: LeadResultProps) {
           <p className="mt-1 text-xs text-[#667283]">Покрытие проверки, не вероятность правдивости</p>
         </div>
       </div>
+      {previous && comparison && (
+        <div className="mt-4 rounded-lg border border-[#dbe3ee] bg-[#f8faff] p-4 text-sm text-[#566274]">
+          <h3 className="font-semibold text-[#303846]">Изменение после повторной проверки</h3>
+          {previousAlgorithmChanged && <p className="mt-2">Прежний отчёт пересчитан по обновлённым правилам проверки источников.</p>}
+          <p className="mt-2">Lead score: {previous.assessment.score} → {assessment.score}; verification confidence: {previous.assessment.verification_confidence} → {assessment.verification_confidence}.</p>
+          {comparison.scoreChanges.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {comparison.scoreChanges.map((item) => (
+                <li key={item.label}>{item.label}: изменение на {item.difference > 0 ? "+" : ""}{item.difference}</li>
+              ))}
+            </ul>
+          )}
+          {comparison.evidenceChanges.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {comparison.evidenceChanges.map((item) => (
+                <li key={item.label}>
+                  {item.label}: {statusLabels[item.before]} → {statusLabels[item.after]}
+                  {item.source_url && <> · <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="text-[#2855b8] underline">источник</a></>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {comparison.scoreChanges.length === 0 && comparison.evidenceChanges.length === 0 && (
+            <p className="mt-2">Оценка и принятые доказательства не изменились.</p>
+          )}
+        </div>
+      )}
       <p className="mt-4 text-sm leading-6 text-[#566274]">{assessment.qualification_reason}</p>
 
       <div className="mt-5">
@@ -107,6 +138,22 @@ export function LeadResult({ result }: LeadResultProps) {
           <h3 className="text-sm font-semibold text-[#303846]">Что нужно уточнить</h3>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#667283]">
             {assessment.risk_signals.map((signal) => <li key={signal}>{signal}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {result.source_discrepancies.length > 0 && (
+        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <h3 className="text-sm font-semibold text-amber-950">Источники с неустановленной принадлежностью</h3>
+          <p className="mt-1 text-xs leading-5 text-amber-900">Эти страницы не меняют оценку и не считаются прямым противоречием данным заявки.</p>
+          <ul className="mt-3 space-y-3">
+            {result.source_discrepancies.map((item) => (
+              <li key={`${item.claim_id}:${item.url}:${item.quote}`} className="text-xs leading-5 text-amber-950">
+                <p>{item.detail}</p>
+                <blockquote className="mt-1 border-l-2 border-amber-300 pl-2">«{item.quote}»</blockquote>
+                <a href={item.url} target="_blank" rel="noopener noreferrer" className="mt-1 block break-all text-[#2855b8] underline">{item.url}</a>
+              </li>
+            ))}
           </ul>
         </div>
       )}

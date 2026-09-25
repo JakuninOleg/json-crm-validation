@@ -4,7 +4,7 @@ import type { AnalysisResult, Lead } from "@/lib/schemas";
 
 const databaseName = "worrki-lead-check";
 const storeName = "reports";
-const pipelineVersion = 2;
+const pipelineVersion = 3;
 
 const cachedReportSchema = z.object({
   key: z.string(),

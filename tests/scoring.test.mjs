@@ -53,7 +53,7 @@ test("Только визовые услуги не дают баллы за м�
   assert.equal(assessment.qualification, "COLD");
 });
 
-test("Совпадения компании и города дают баллы даже без профильных подтверждений", () => {
+test("Одного названия компании и города недостаточно для баллов за местоположение", () => {
   const cityQuote = "On-Line Dynamics Limited is located in Ibadan, Nigeria.";
   const source = { id: "s1", url: "https://company.example/about", text: `${quotes.company} ${cityQuote}` };
   const report = buildVerificationReport(lead, [source], [], [
@@ -61,10 +61,11 @@ test("Совпадения компании и города дают баллы 
     { claim_id: "city", verdict: "supports_current", source_id: "s1", quote: cityQuote },
   ]);
   const assessment = scoreLead(report);
-  assert.equal(assessment.score, 11);
-  assert.equal(assessment.verification_confidence, 18);
+  assert.equal(report.checks.find((check) => check.claim_id === "city").status, "identity_ambiguous");
+  assert.equal(assessment.score, 8);
+  assert.equal(assessment.verification_confidence, 13);
   const confidence = getConfidenceBreakdown(report);
-  assert.deepEqual(confidence.map(({ points }) => points), [12.5, 0, 0, 0, 5]);
+  assert.deepEqual(confidence.map(({ points }) => points), [12.5, 0, 0, 0, 0]);
   assert.equal(Math.round(confidence.reduce((sum, item) => sum + item.points, 0)), assessment.verification_confidence);
   assert.equal(assessment.qualification, "COLD");
   assert.equal(assessment.review_required, true);

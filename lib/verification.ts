@@ -34,7 +34,7 @@ export const verificationReportSchema = z.object({
     claim_id: claimIdSchema,
     claim: z.string(),
     submitted_value: z.string(),
-    status: z.enum(["confirmed", "source_claim", "partial_support", "historical", "contradicted", "conflict", "no_public_confirmation", "not_provided"]),
+    status: z.enum(["confirmed", "source_claim", "partial_support", "historical", "contradicted", "conflict", "identity_ambiguous", "no_public_confirmation", "not_provided"]),
     source_url: z.url().nullable(),
     quote: z.string().nullable(),
     detail: z.string(),
@@ -42,6 +42,9 @@ export const verificationReportSchema = z.object({
   sources: z.array(z.url()),
   unavailable_sources: z.array(z.url()),
   source_failures: z.array(z.object({ url: z.url(), reason: z.string() })).default([]),
+  source_discrepancies: z.array(z.object({
+    claim_id: claimIdSchema, url: z.url(), quote: z.string(), detail: z.string(),
+  })).default([]),
   source_candidates: z.array(z.object({
     url: z.url(),
     origin: z.enum(["search", "previous", "both"]),
@@ -101,6 +104,14 @@ function activityIsFullySupported(submitted: string, quote: string) {
   return concepts.every(({ claimed, found }) => !claimed.test(text) || found.test(evidence));
 }
 
+function activityHasClaimedSignal(submitted: string, quote: string) {
+  const text = normalize(submitted);
+  const evidence = normalize(quote);
+  const signals = [/visa|виз/, /migrat|миграц/, /educat|образован|student|студент/, /recruit|staffing|кандидат|трудоустрой/];
+  const claimed = signals.filter((signal) => signal.test(text));
+  return claimed.length === 0 || claimed.some((signal) => signal.test(evidence));
+}
+
 function isOfficialSource(url: string) {
   return /(^|\.)gov(?:\.[a-z]{2})?$/.test(new URL(url).hostname.toLowerCase());
 }
@@ -113,6 +124,48 @@ function isArchiveSource(url: string) {
 function isDiscussionSource(url: string) {
   const hostname = new URL(url).hostname.toLowerCase();
   return ["nairaland.com", "reddit.com", "quora.com"].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+}
+
+function contactDomains(source: PublicSource) {
+  const host = new URL(source.url).hostname.replace(/^www\./, "");
+  const platforms = ["facebook.com", "instagram.com", "linkedin.com", "youtube.com", "twitter.com", "x.com", "wa.me"];
+  const matches = source.text.match(/(?:https?:\/\/|www\.)[a-z\d.-]+\.[a-z]{2,}/gi) ?? [];
+  return new Set(matches.map((value) => {
+    const address = value.startsWith("www.") ? `https://${value}` : value;
+    return new URL(address).hostname.replace(/^www\./, "");
+  }).filter((domain) => domain !== host && !platforms.some((platform) => domain === platform || domain.endsWith(`.${platform}`))));
+}
+
+function contactPhones(source: PublicSource) {
+  const matches = source.text.match(/\+?\d[\d\s().-]{8,}\d/g) ?? [];
+  return new Set(matches.map((value) => value.replace(/\D/g, "").slice(-10)).filter((value) => value.length === 10));
+}
+
+function sameEntity(source: PublicSource, anchors: PublicSource[]) {
+  if (anchors.some((anchor) => anchor.id === source.id)) return true;
+  const host = new URL(source.url).hostname;
+  const listingHosts = ["linkedin.com", "goafricaonline.com", "worldorgs.com", "lusha.com", "facebook.com"];
+  const isListingHost = listingHosts.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  if (!isListingHost && anchors.some((anchor) => new URL(anchor.url).hostname === host)) return true;
+  const domains = contactDomains(source);
+  const phones = contactPhones(source);
+  return anchors.some((anchor) =>
+    [...contactDomains(anchor)].some((domain) => domains.has(domain)) ||
+    [...contactPhones(anchor)].some((phone) => phones.has(phone)));
+}
+
+function identityAmbiguity(source: PublicSource, anchors: PublicSource[]) {
+  const sourceDomains = contactDomains(source);
+  const anchorDomains = new Set(anchors.flatMap((anchor) => [...contactDomains(anchor)]));
+  const differentWebsites = sourceDomains.size > 0 && anchorDomains.size > 0 &&
+    ![...sourceDomains].some((domain) => anchorDomains.has(domain));
+  const profileConflict = /engineering consulting/i.test(source.text) &&
+    anchors.some((anchor) => /travel agency|visa processing/i.test(anchor.text));
+  const details = ["Не найден общий сайт или телефон с источником, подтверждающим профиль компании."];
+  if (differentWebsites) details.push("Страницы указывают разные сайты.");
+  if (profileConflict) details.push("Страницы описывают разные направления бизнеса.");
+  details.push("Возможно, это другая организация; баллы по этой странице не начислены.");
+  return details.join(" ");
 }
 
 export function buildVerificationReport(
@@ -130,6 +183,31 @@ export function buildVerificationReport(
     const verdict = item.verdict === "supports_current" && isArchiveSource(source.url) ? "historical" : item.verdict;
     return [{ ...item, verdict, url: source.url, official: isOfficialSource(source.url) }];
   });
+  const anchorIds = new Set(accepted.filter((item) =>
+    item.verdict === "supports_current" &&
+    ((item.claim_id === "activity" && activityHasClaimedSignal(String(lead.experience ?? ""), item.quote)) ||
+      (item.claim_id === "company" && item.official)))
+    .map((item) => item.source_id));
+  const anchors = sources.filter((source) => anchorIds.has(source.id));
+  const belongsToEntity = (item: (typeof accepted)[number]) => {
+    const source = sources.find((candidate) => candidate.id === item.source_id);
+    if (!source) return false;
+    if (item.official) return true;
+    if (item.claim_id === "city" || item.claim_id === "address") return sameEntity(source, anchors);
+    if (item.claim_id === "activity" && item.verdict === "contradicts") return sameEntity(source, anchors);
+    if (item.claim_id === "company" && anchors.length > 0) return sameEntity(source, anchors);
+    return true;
+  };
+  const sourceDiscrepancies = accepted.filter((item) => !belongsToEntity(item) &&
+    (item.verdict === "contradicts" || item.claim_id === "company"))
+    .map((item) => {
+      const source = sources.find((candidate) => candidate.id === item.source_id);
+      return {
+        claim_id: item.claim_id, url: item.url, quote: item.quote,
+        detail: source ? identityAmbiguity(source, anchors) : "Связь страницы с профилем компании не установлена.",
+      };
+    }).filter((item, index, items) => items.findIndex((candidate) =>
+      candidate.claim_id === item.claim_id && candidate.url === item.url && candidate.quote === item.quote) === index);
   const usedSources = new Set<string>();
   const checks: VerificationReport["checks"] = claimDefinitions.map(({ id, label, field }) => {
     const submittedValue = String(lead[field] ?? "").trim();
@@ -139,8 +217,13 @@ export function buildVerificationReport(
       return { claim_id: id, claim: label, submitted_value: submittedValue, status: "not_provided", source_url: null, quote: null, detail: "Утверждение не содержится в заявке." };
     }
 
-    const items = accepted.filter((item) => item.claim_id === id);
-    const current = items.filter((item) => item.verdict === "supports_current").sort((a, b) => Number(b.official) - Number(a.official))[0];
+    const proposed = accepted.filter((item) => item.claim_id === id ||
+      (id === "company" && item.claim_id === "activity" && item.verdict === "supports_current" &&
+        activityHasClaimedSignal(String(lead.experience ?? ""), item.quote)));
+    const items = proposed.filter(belongsToEntity);
+    const currentItems = items.filter((item) => item.verdict === "supports_current" &&
+      (id !== "activity" || activityHasClaimedSignal(submittedValue, item.quote)));
+    const current = currentItems.sort((a, b) => Number(b.official) - Number(a.official))[0];
     const contradicted = items.find((item) => item.verdict === "contradicts");
     const historical = items.find((item) => item.verdict === "historical");
     const chosen = contradicted ?? current ?? historical;
@@ -165,6 +248,15 @@ export function buildVerificationReport(
     if (historical) {
       return { claim_id: id, claim: label, submitted_value: submittedValue, status: "historical", source_url: historical.url, quote: historical.quote, detail: "Найдено историческое упоминание; актуальность заявленного сведения не установлена." };
     }
+    if ((id === "city" || id === "address") && proposed.some((item) => item.verdict === "supports_current")) {
+      const item = proposed.find((candidate) => candidate.verdict === "supports_current")!;
+      const source = sources.find((candidate) => candidate.id === item.source_id);
+      return {
+        claim_id: id, claim: label, submitted_value: submittedValue, status: "identity_ambiguous",
+        source_url: item.url, quote: item.quote,
+        detail: source ? identityAmbiguity(source, anchors) : "Связь страницы с профилем компании не установлена.",
+      };
+    }
     return {
       claim_id: id, claim: label, submitted_value: submittedValue, status: "no_public_confirmation", source_url: null, quote: null,
       detail: unavailableSources.length ? "Пригодного подтверждения нет; часть найденных страниц сервер не смог прочитать." : "Пригодного публичного подтверждения не найдено.",
@@ -174,6 +266,6 @@ export function buildVerificationReport(
   return {
     checked_at: new Date().toISOString(), status: hasCurrentEvidence ? "checked" : "insufficient_evidence",
     checks, sources: [...usedSources], unavailable_sources: unavailableSources,
-    source_failures: sourceFailures, source_candidates: [],
+    source_failures: sourceFailures, source_discrepancies: sourceDiscrepancies, source_candidates: [],
   };
 }
