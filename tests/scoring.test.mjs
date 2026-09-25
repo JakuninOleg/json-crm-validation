@@ -36,7 +36,10 @@ test("Заявка без доступных источников получае
   assert.equal(assessment.score, 0);
   assert.equal(assessment.qualification, "COLD");
   assert.equal(assessment.verification_confidence, 0);
-  assert.match(assessment.crm_comment, /не означает/);
+  assert.match(assessment.crm_comment, /Пока низкий приоритет/);
+  assert.match(assessment.crm_comment, /Публичного подтверждения компании пока не найдено/);
+  assert.match(assessment.crm_comment, /попросить актуальный сайт/);
+  assert.doesNotMatch(assessment.crm_comment, /\d+\/\d+|балл|confidence/i);
   assert.equal(assessment.review_required, true);
 });
 
@@ -82,6 +85,8 @@ test("Полный набор прямых цитат даёт 100 и HOT", () =
   assert.equal(assessment.score, 100);
   assert.equal(assessment.qualification, "HOT");
   assert.equal(assessment.review_required, false);
+  assert.match(assessment.crm_comment, /Высокий приоритет/);
+  assert.match(assessment.crm_comment, /обсудить сотрудничество/);
 });
 
 test("Те же сведения на неофициальной странице снижают баллы и не дают HOT", () => {
@@ -95,6 +100,8 @@ test("Те же сведения на неофициальной страниц�
   assert.equal(assessment.qualification, "WARM");
   assert.equal(assessment.review_required, true);
   assert.ok(assessment.verification_confidence > 0);
+  assert.match(assessment.crm_comment, /дальнейшего контакта/);
+  assert.doesNotMatch(assessment.crm_comment, /\d+\/\d+|балл|confidence/i);
 });
 
 test("Прямое противоречие профилю при известной компании даёт COLD", () => {
@@ -108,6 +115,8 @@ test("Прямое противоречие профилю при известн
   assert.equal(assessment.score, 15);
   assert.equal(assessment.qualification, "COLD");
   assert.equal(assessment.review_required, true);
+  assert.match(assessment.crm_comment, /расхождения с заявкой/);
+  assert.match(assessment.crm_comment, /уточнить расхождения/);
 });
 
 test("Итоговый балл всегда равен сумме начислений даже при COLD", () => {

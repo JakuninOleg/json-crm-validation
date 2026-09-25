@@ -83,8 +83,13 @@ test("Адрес из каталога с другим сайтом не доб�
   assert.match(check(report, "city").detail, /разные сайты/);
   assert.match(check(report, "city").detail, /разные направления бизнеса/);
   assert.deepEqual(report.sources, [sources[0].url]);
-  assert.equal(scoreLead(report).score, 18);
-  assert.equal(scoreLead(report).verification_confidence, 19);
+  const assessment = scoreLead(report);
+  assert.equal(assessment.score, 18);
+  assert.equal(assessment.verification_confidence, 19);
+  assert.match(assessment.crm_comment, /визовых услуг/);
+  assert.match(assessment.crm_comment, /Связь заявителя с компанией и его должность подтвердить не удалось/);
+  assert.match(assessment.crm_comment, /Принадлежность части найденных страниц/);
+  assert.doesNotMatch(assessment.crm_comment, /\d+\/\d+|балл|confidence|источник.*=/i);
 });
 
 test("Противоречие из каталога без связи с профилем не обнуляет баллы", () => {

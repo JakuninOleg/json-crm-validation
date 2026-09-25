@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { analysisResultSchema } from "@/lib/schemas";
 import type { AnalysisResult, Lead } from "@/lib/schemas";
+import { buildManagerSummary } from "@/lib/scoring";
 
 const databaseName = "worrki-lead-check";
 const storeName = "reports";
@@ -48,7 +49,9 @@ export async function findCachedReport(lead: Lead): Promise<{ result: AnalysisRe
     const parsed = cachedReportSchema.safeParse(stored);
     if (!parsed.success || parsed.data.lead_id !== lead.lead_id) return null;
     if (Number.isNaN(Date.parse(parsed.data.result.checked_at))) return null;
-    return { result: parsed.data.result, isCurrent: parsed.data.pipeline_version === pipelineVersion };
+    const result = parsed.data.result;
+    result.assessment.crm_comment = buildManagerSummary(result, result.assessment.qualification);
+    return { result, isCurrent: parsed.data.pipeline_version === pipelineVersion };
   } finally {
     database.close();
   }

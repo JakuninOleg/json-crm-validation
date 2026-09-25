@@ -80,6 +80,61 @@ function makeCriterion(name: Criterion["name"], label: string, max: number, base
   return { name, label, points, max, reason, source_url: points > 0 ? check?.source_url ?? null : null };
 }
 
+export function buildManagerSummary(report: VerificationReport, qualification: Assessment["qualification"]): string {
+  const company = findCheck(report, "company");
+  const activity = findCheck(report, "activity");
+  const person = findCheck(report, "person_link");
+  const founder = findCheck(report, "founder");
+  const ceo = findCheck(report, "ceo");
+  const companyFound = evidenceWeight(company) > 0;
+  const activityFound = evidenceWeight(activity) > 0;
+  const personFound = evidenceWeight(person) > 0;
+  const roleFound = evidenceWeight(founder) > 0 || evidenceWeight(ceo) > 0;
+  const hasConflict = report.checks.some((check) => check.status === "contradicted" || check.status === "conflict");
+  const hasAmbiguousSources = report.source_discrepancies.length > 0 ||
+    report.checks.some((check) => check.status === "identity_ambiguous");
+  const priority = {
+    HOT: "Высокий приоритет.",
+    WARM: "Есть основания для дальнейшего контакта.",
+    COLD: "Пока низкий приоритет.",
+  }[qualification];
+  const summary = [priority];
+
+  if (companyFound && activityFound) {
+    const activityDescription = /visa|виз/i.test(activity?.quote ?? "")
+      ? "с упоминанием визовых услуг"
+      : "с описанием деятельности";
+    summary.push(`Найден публичный профиль компании ${activityDescription}.`);
+  } else if (companyFound) {
+    summary.push("Найдены публичные сведения о компании, но её заявленную деятельность подтвердить не удалось.");
+  } else {
+    summary.push("Публичного подтверждения компании пока не найдено.");
+  }
+
+  if (!personFound && !roleFound) {
+    summary.push("Связь заявителя с компанией и его должность подтвердить не удалось.");
+  } else if (!personFound) {
+    summary.push("Найдены сведения о должности заявителя, но его связь с компанией требует уточнения.");
+  } else if (!roleFound) {
+    summary.push("Связь заявителя с компанией указана в источнике, но его текущая должность не подтверждена.");
+  }
+
+  if (hasConflict) summary.push("В найденных сведениях есть расхождения с заявкой.");
+  if (hasAmbiguousSources) summary.push("Принадлежность части найденных страниц именно этой компании не установлена.");
+
+  if (hasConflict) {
+    summary.push("Что сделать: уточнить расхождения и запросить подтверждающие документы.");
+  } else if (!companyFound) {
+    summary.push("Что сделать: попросить актуальный сайт или публичный профиль компании.");
+  } else if (!personFound || !roleFound) {
+    summary.push("Что сделать: попросить заявителя подтвердить свою роль и прислать актуальный профиль компании.");
+  } else {
+    summary.push("Что сделать: связаться с заявителем и обсудить сотрудничество.");
+  }
+
+  return summary.join(" ");
+}
+
 export function scoreLead(report: VerificationReport): Assessment {
   const company = findCheck(report, "company");
   const activity = findCheck(report, "activity");
@@ -172,7 +227,7 @@ export function scoreLead(report: VerificationReport): Assessment {
 
   const reviewRequired = qualification !== "HOT" || coverage < 70 || riskSignals.length > 0;
   const positiveSignals = breakdown.filter((item) => item.points > 0).map((item) => item.reason);
-  const crmComment = `${qualification}, ${score}/100; подтверждённость ${coverage}/100. ${qualificationReason} ${positiveSignals.join(" ")} ${riskSignals.join(" ")}`.trim();
+  const crmComment = buildManagerSummary(report, qualification);
 
   return assessmentSchema.parse({
     qualification, score, verification_confidence: verificationConfidence, review_required: reviewRequired,
