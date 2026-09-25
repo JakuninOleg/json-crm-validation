@@ -162,7 +162,7 @@ export function scoreLead(report: VerificationReport): Assessment {
   if (!companyKnown) riskSignals.push("Компания не подтверждена пригодным источником.");
   if (!currentPerson) riskSignals.push("Связь человека с компанией не подтверждена.");
   if (!currentRole) riskSignals.push("Текущие полномочия человека не подтверждены.");
-  if (report.unavailable_sources.length) riskSignals.push("Часть найденных страниц недоступна.");
+  if (report.unavailable_sources.length) riskSignals.push("Часть найденных страниц сервер не смог прочитать.");
 
   const reviewRequired = qualification !== "HOT" || coverage < 70 || riskSignals.length > 0;
   const positiveSignals = breakdown.filter((item) => item.points > 0).map((item) => item.reason);

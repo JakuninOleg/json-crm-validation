@@ -98,19 +98,26 @@ export default function Home() {
     activeRequest.current = null;
     const lead = validation.lead;
     let cacheStatus: CompletedCacheStatus = forceRefresh ? "bypassed" : "miss";
+    let previousSources: string[] = [];
 
-    if (!forceRefresh) {
-      setAnalysis({ status: "checking_cache" });
-      try {
-        const cached = await findCachedReport(lead);
-        if (version !== requestVersion.current) return;
-        if (cached) {
+    setAnalysis({ status: "checking_cache" });
+    try {
+      const cached = await findCachedReport(lead);
+      if (version !== requestVersion.current) return;
+      if (cached) {
+        if (!forceRefresh) {
           setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached });
           return;
         }
-      } catch {
-        cacheStatus = "unavailable";
+        const previouslyRead = cached.source_candidates.filter((candidate) => candidate.status !== "not_read");
+        const notRead = cached.source_candidates.filter((candidate) => candidate.status === "not_read");
+        const knownUrls = cached.source_candidates.length
+          ? [...previouslyRead, ...notRead].map((candidate) => candidate.url)
+          : [...cached.sources, ...cached.unavailable_sources];
+        previousSources = [...new Set(knownUrls)].slice(0, 10);
       }
+    } catch {
+      cacheStatus = "unavailable";
     }
 
     if (version !== requestVersion.current) return;
@@ -123,7 +130,7 @@ export default function Home() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(lead),
+        body: JSON.stringify(forceRefresh ? { lead, previous_sources: previousSources } : lead),
         signal: controller.signal,
       });
       const data = await readAnalysis(response, (nextStage) => {

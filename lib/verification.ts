@@ -32,6 +32,11 @@ export const verificationReportSchema = z.object({
   sources: z.array(z.url()),
   unavailable_sources: z.array(z.url()),
   source_failures: z.array(z.object({ url: z.url(), reason: z.string() })).default([]),
+  source_candidates: z.array(z.object({
+    url: z.url(),
+    origin: z.enum(["search", "previous", "both"]),
+    status: z.enum(["used", "read_no_evidence", "read_not_analyzed", "fetch_failed", "not_read"]),
+  })).default([]),
 });
 export type VerificationReport = z.infer<typeof verificationReportSchema>;
 
@@ -146,12 +151,13 @@ export function buildVerificationReport(
     }
     return {
       claim_id: id, claim: label, submitted_value: submittedValue, status: "no_public_confirmation", source_url: null, quote: null,
-      detail: unavailableSources.length ? "Пригодного подтверждения нет; часть найденных страниц недоступна." : "Пригодного публичного подтверждения не найдено.",
+      detail: unavailableSources.length ? "Пригодного подтверждения нет; часть найденных страниц сервер не смог прочитать." : "Пригодного публичного подтверждения не найдено.",
     };
   });
   const hasCurrentEvidence = checks.some((check) => ["confirmed", "source_claim"].includes(check.status));
   return {
     checked_at: new Date().toISOString(), status: hasCurrentEvidence ? "checked" : "insufficient_evidence",
-    checks, sources: [...usedSources], unavailable_sources: unavailableSources, source_failures: sourceFailures,
+    checks, sources: [...usedSources], unavailable_sources: unavailableSources,
+    source_failures: sourceFailures, source_candidates: [],
   };
 }

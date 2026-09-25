@@ -31,6 +31,14 @@ const statusStyles = {
   not_provided: "text-[#7f8997]",
 } satisfies Record<AnalysisResult["checks"][number]["status"], string>;
 
+const sourceStatusLabels = {
+  used: "Использована в выводах",
+  read_no_evidence: "Прочитана, но пригодной цитаты, связывающей страницу с лидом, нет",
+  read_not_analyzed: "Прочитана, но не вошла в шесть страниц для анализа",
+  fetch_failed: "Сервер не смог прочитать страницу",
+  not_read: "Не прочитана в этом запуске из-за лимита",
+} satisfies Record<AnalysisResult["source_candidates"][number]["status"], string>;
+
 export function LeadResult({ result }: LeadResultProps) {
   const checkedAt = new Date(result.checked_at).toLocaleString("ru-RU");
   const insufficient = result.status === "insufficient_evidence";
@@ -129,7 +137,28 @@ export function LeadResult({ result }: LeadResultProps) {
         ))}
       </ul>
 
-      {result.sources.length > 0 && (
+      {result.source_candidates.length > 0 && (
+        <div className="mt-5 border-t border-[#e7e9ee] pt-4">
+          <h3 className="text-sm font-semibold text-[#303846]">Как обработаны найденные ссылки</h3>
+          <p className="mt-1 text-xs leading-5 text-[#667283]">
+            Состав поисковой выдачи может меняться. Сервер читает до 10 страниц, из них до шести передаёт на анализ. Ссылка сама по себе не подтверждает сведения из заявки.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {result.source_candidates.map((candidate) => (
+              <li key={candidate.url} className="text-xs">
+                <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="break-all text-[#2855b8] underline">{candidate.url}</a>
+                <p className="mt-0.5 text-[#667283]">
+                  {sourceStatusLabels[candidate.status]}
+                  {candidate.origin === "previous" && " · ссылка из прошлого отчёта"}
+                  {candidate.status === "fetch_failed" && `: ${result.source_failures.find((item) => item.url === candidate.url)?.reason ?? "причина не сохранена"}`}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {result.source_candidates.length === 0 && result.sources.length > 0 && (
         <div className="mt-5 border-t border-[#e7e9ee] pt-4">
           <h3 className="text-sm font-semibold text-[#303846]">Использованные источники</h3>
           <ul className="mt-2 space-y-1">
@@ -140,7 +169,7 @@ export function LeadResult({ result }: LeadResultProps) {
         </div>
       )}
 
-      {result.unavailable_sources.length > 0 && (
+      {result.source_candidates.length === 0 && result.unavailable_sources.length > 0 && (
         <div className="mt-5 border-t border-[#e7e9ee] pt-4">
           <h3 className="text-sm font-semibold text-[#303846]">Страницы, которые сервер не смог прочитать</h3>
           <p className="mt-1 text-xs leading-5 text-[#667283]">Сайт может открываться в браузере. Непрочитанная страница не использовалась как доказательство.</p>

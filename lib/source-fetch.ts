@@ -115,7 +115,7 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
 
 export async function fetchPublicSources(urls: string[], signal: AbortSignal): Promise<SourceResult[]> {
   signal.throwIfAborted();
-  return Promise.all(urls.slice(0, 6).map(async (url, index) => {
+  return Promise.all(urls.slice(0, 10).map(async (url, index) => {
     try {
       const page = await readPage(url, signal);
       return { url, source: { id: `s${index + 1}`, url: page.url, text: page.text }, unavailable: false };

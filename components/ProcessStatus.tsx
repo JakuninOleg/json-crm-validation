@@ -53,7 +53,7 @@ function getCacheDescription(cacheStatus: CacheStatus, cachedAt?: string) {
     return `Отчёт найден, проверка от ${new Date(cachedAt).toLocaleString("ru-RU")}. Новые запросы не выполнялись.`;
   }
   if (cacheStatus === "miss") return "Сохранённого отчёта нет. Запускаем новую проверку.";
-  if (cacheStatus === "bypassed") return "Поиск пропущен: запрошена новая проверка.";
+  if (cacheStatus === "bypassed") return "Новая проверка: прежний результат не используется; старые ссылки перепроверяются, если они есть.";
   if (cacheStatus === "unavailable") return "Хранилище браузера недоступно. Запускаем новую проверку.";
   return "Проверяем данные в этом браузере";
 }

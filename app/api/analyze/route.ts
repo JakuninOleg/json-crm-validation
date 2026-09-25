@@ -2,8 +2,14 @@ import { describeAnalysisError } from "@/lib/analysis-errors";
 import { analyzeLead } from "@/lib/openai";
 import { describeLeadIssue, leadSchema } from "@/lib/schemas";
 import type { AnalysisEvent, AnalysisStage } from "@/lib/schemas";
+import { z } from "zod";
 
 export const maxDuration = 120;
+
+const refreshedRequestSchema = z.object({
+  lead: leadSchema,
+  previous_sources: z.array(z.url()).max(10),
+});
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -24,7 +30,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const lead = leadSchema.safeParse(body);
+  const isRefreshRequest = body !== null && typeof body === "object" && "lead" in body && "previous_sources" in body;
+  const refreshedRequest = refreshedRequestSchema.safeParse(body);
+  if (isRefreshRequest && !refreshedRequest.success) {
+    return Response.json(
+      { status: "error", code: "INVALID_INPUT", message: "Некорректные данные для повторной проверки." },
+      { status: 422 },
+    );
+  }
+  const lead = leadSchema.safeParse(refreshedRequest.success ? refreshedRequest.data.lead : body);
   if (!lead.success) {
     return Response.json(
       { status: "error", code: "INVALID_INPUT", message: describeLeadIssue(lead.error) },
@@ -50,7 +64,7 @@ export async function POST(request: Request) {
         const result = await analyzeLead(lead.data, (nextStage) => {
           stage = nextStage;
           send({ status: "progress", stage });
-        }, signal);
+        }, signal, refreshedRequest.success ? refreshedRequest.data.previous_sources : []);
         send({ status: "verified", lead_id: lead.data.lead_id, result });
       } catch (error) {
         // Log only diagnostic fields. Provider messages may contain request data.
