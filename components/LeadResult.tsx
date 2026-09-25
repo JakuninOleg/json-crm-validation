@@ -34,9 +34,9 @@ const statusStyles = {
 const sourceStatusLabels = {
   used: "Использована в выводах",
   read_no_evidence: "Прочитана, но пригодной цитаты, связывающей страницу с лидом, нет",
-  read_not_analyzed: "Прочитана, но не вошла в шесть страниц для анализа",
+  read_not_analyzed: "Прочитана, но не вошла в анализ в сохранённом отчёте",
   fetch_failed: "Сервер не смог прочитать страницу",
-  not_read: "Не прочитана в этом запуске из-за лимита",
+  not_read: "Не прочитана в этом запуске",
 } satisfies Record<AnalysisResult["source_candidates"][number]["status"], string>;
 
 export function LeadResult({ result }: LeadResultProps) {
@@ -143,7 +143,7 @@ export function LeadResult({ result }: LeadResultProps) {
         <div className="mt-5 border-t border-[#e7e9ee] pt-4">
           <h3 className="text-sm font-semibold text-[#303846]">Как обработаны найденные ссылки</h3>
           <p className="mt-1 text-xs leading-5 text-[#667283]">
-            Состав поисковой выдачи может меняться. Сервер читает до 10 страниц, из них до шести передаёт на анализ. Ссылка сама по себе не подтверждает сведения из заявки.
+            Состав поисковой выдачи может меняться. Сервер пытается прочитать все найденные ссылки и анализирует доступный текст пакетами. Ссылка сама по себе не подтверждает сведения из заявки.
           </p>
           <ul className="mt-2 space-y-2">
             {processedCandidates.map((candidate) => (
@@ -160,7 +160,7 @@ export function LeadResult({ result }: LeadResultProps) {
           {skippedCandidates.length > 0 && (
             <details className="mt-3 text-xs text-[#667283]">
               <summary className="cursor-pointer font-medium text-[#303846]">
-                Остальные ссылки ({skippedCandidates.length}): не проверялись из-за лимита
+                Остальные ссылки ({skippedCandidates.length}): не прочитаны в этом запуске
               </summary>
               <ul className="mt-2 space-y-1 pl-4">
                 {skippedCandidates.map((candidate) => (

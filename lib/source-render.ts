@@ -6,6 +6,35 @@ type PageResponse = Awaited<ReturnType<typeof requestPublicResource>>;
 
 const MAX_RESOURCE_REQUESTS = 30;
 const RENDER_TIMEOUT_MS = 12_000;
+const MAX_ACTIVE_BROWSERS = 2;
+let activeBrowsers = 0;
+const browserQueue: Array<() => void> = [];
+
+async function reserveBrowser(signal: AbortSignal): Promise<() => void> {
+  signal.throwIfAborted();
+  if (activeBrowsers < MAX_ACTIVE_BROWSERS) {
+    activeBrowsers += 1;
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      const resume = () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        const index = browserQueue.indexOf(resume);
+        if (index !== -1) browserQueue.splice(index, 1);
+        reject(signal.reason);
+      };
+      browserQueue.push(resume);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  return () => {
+    const next = browserQueue.shift();
+    if (next) next();
+    else activeBrowsers -= 1;
+  };
+}
 
 function browserExecutable() {
   if (process.platform !== "win32") return chromium.executablePath();
@@ -15,6 +44,7 @@ function browserExecutable() {
 }
 
 export async function renderPage(initial: PageResponse, signal: AbortSignal) {
+  const releaseBrowser = await reserveBrowser(signal);
   const renderSignal = AbortSignal.any([signal, AbortSignal.timeout(RENDER_TIMEOUT_MS)]);
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
@@ -64,10 +94,10 @@ export async function renderPage(initial: PageResponse, signal: AbortSignal) {
       }
     });
     await page.goto(initial.url, { waitUntil: "domcontentloaded", timeout: RENDER_TIMEOUT_MS });
-    await page.waitForFunction(() => (document.body?.innerText.trim().length ?? 0) >= 100, {
+    await page.waitForFunction(() => (document.body?.innerText.trim().length ?? 0) >= 12, {
       timeout: Math.max(1, RENDER_TIMEOUT_MS - 2_000),
     });
-    const text = (await page.evaluate(() => document.body.innerText)).trim().slice(0, 30_000);
+    const text = (await page.evaluate(() => document.body.innerText)).trim();
     if (renderSignal.aborted) throw renderSignal.reason;
     return { url: initial.url, text };
   } catch (error) {
@@ -76,5 +106,6 @@ export async function renderPage(initial: PageResponse, signal: AbortSignal) {
     throw new SourceReadError("браузер не смог прочитать текст за отведённое время");
   } finally {
     await browser?.close().catch(() => {});
+    releaseBrowser();
   }
 }

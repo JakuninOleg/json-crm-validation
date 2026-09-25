@@ -1,29 +1,21 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { AnalysisError } from "@/lib/analysis-errors";
-import { fetchPublicSources } from "@/lib/source-fetch";
+import { fetchPublicSources, sourceChunks } from "@/lib/source-fetch";
 import type { PublicSource } from "@/lib/source-fetch";
 import { selectSourceCandidates } from "@/lib/source-selection";
 import { scoreLead } from "@/lib/scoring";
 import { analysisResultSchema } from "@/lib/schemas";
 import { buildVerificationReport, modelEvidenceSchema } from "@/lib/verification";
+import type { ModelEvidence } from "@/lib/verification";
 import type { AnalysisStage, Lead } from "@/lib/schemas";
 import type { AnalysisResult } from "@/lib/schemas";
 
-function rankReadableSources(sources: PublicSource[], lead: Lead) {
-  const words = lead.company_name.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && word !== "limited");
-  const addressWords = (lead.company_address ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 4);
-  function relevance(source: PublicSource) {
-    const text = source.text.toLowerCase();
-    const companyMatch = words.length > 0 && words.every((word) => text.includes(word));
-    const addressMatch = addressWords.length >= 2 && addressWords.slice(0, 2).every((word) => text.includes(word));
-    return Number(companyMatch) * 8 + Number(text.includes(lead.name.toLowerCase())) * 6 + Number(addressMatch) * 4;
-  }
-  return sources.sort((left, right) => relevance(right) - relevance(left) || left.url.localeCompare(right.url)).slice(0, 6);
-}
+const CHUNKS_PER_REQUEST = 6;
+const ANALYSIS_CONCURRENCY = 3;
 
 async function extractEvidence(client: OpenAI, lead: Lead, sources: PublicSource[], signal: AbortSignal) {
-  const pages = sources.map(({ id, url, text }) => ({ id, url, text: text.slice(0, 12_000) }));
+  const pages = sources.map(({ id, url, text }) => ({ id, url, text }));
   const response = await client.responses.parse({
     model: "gpt-6-luna", reasoning: { effort: "medium" }, max_output_tokens: 4500, store: false,
     input: [
@@ -39,6 +31,25 @@ async function extractEvidence(client: OpenAI, lead: Lead, sources: PublicSource
   const parsed = modelEvidenceSchema.safeParse(response.output_parsed);
   if (!parsed.success) throw new AnalysisError("EVIDENCE_FAILED");
   return parsed.data.evidence;
+}
+
+async function analyzeAllSources(client: OpenAI, lead: Lead, sources: PublicSource[], signal: AbortSignal): Promise<ModelEvidence[]> {
+  const chunks = sourceChunks(sources);
+  const batches: PublicSource[][] = [];
+  for (let index = 0; index < chunks.length; index += CHUNKS_PER_REQUEST) {
+    batches.push(chunks.slice(index, index + CHUNKS_PER_REQUEST));
+  }
+  const results: ModelEvidence[][] = new Array(batches.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(ANALYSIS_CONCURRENCY, batches.length) }, async () => {
+    while (nextIndex < batches.length) {
+      signal.throwIfAborted();
+      const index = nextIndex++;
+      results[index] = await extractEvidence(client, lead, batches[index], signal);
+    }
+  });
+  await Promise.all(workers);
+  return results.flat();
 }
 
 export async function analyzeLead(
@@ -68,22 +79,17 @@ export async function analyzeLead(
   const { candidates, toFetch } = selectSourceCandidates(search, lead, previousUrls);
   const fetched = await fetchPublicSources(toFetch, signal);
   signal.throwIfAborted();
-  const readSources = fetched.flatMap((item) => item.unavailable ? [] : [item.source]);
-  const sources = rankReadableSources(readSources, lead);
+  const sources = fetched.flatMap((item) => item.unavailable ? [] : [item.source]);
   const failures = fetched.flatMap((item) => item.unavailable ? [{ url: item.url, reason: item.reason }] : []);
   const unavailable = failures.map((item) => item.url);
-  let evidence: Awaited<ReturnType<typeof extractEvidence>> = [];
   onProgress("analyzing");
-  if (sources.length) evidence = await extractEvidence(client, lead, sources, signal);
+  const evidence = await analyzeAllSources(client, lead, sources, signal);
   onProgress("validating");
   const report = buildVerificationReport(lead, sources, unavailable, evidence, failures);
   report.source_candidates = candidates.map(({ url, origin }) => {
     const fetchedSource = fetched.find((item) => item.url === url);
     if (!fetchedSource) return { url, origin, status: "not_read" };
     if (fetchedSource.unavailable) return { url, origin, status: "fetch_failed" };
-    if (!sources.some((source) => source.id === fetchedSource.source.id)) {
-      return { url, origin, status: "read_not_analyzed" };
-    }
     const status = report.sources.includes(fetchedSource.source.url) ? "used" : "read_no_evidence";
     return { url, origin, status };
   });

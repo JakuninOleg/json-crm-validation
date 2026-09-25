@@ -4,11 +4,11 @@ import { describeLeadIssue, leadSchema } from "@/lib/schemas";
 import type { AnalysisEvent, AnalysisStage } from "@/lib/schemas";
 import { z } from "zod";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const refreshedRequestSchema = z.object({
   lead: leadSchema,
-  previous_sources: z.array(z.url()).max(10),
+  previous_sources: z.array(z.url()).max(200),
 });
 
 export async function POST(request: Request) {
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
 
   try {
     const rawBody = await request.text();
-    if (rawBody.length > 12_000) {
+    if (rawBody.length > 64_000) {
       return Response.json(
         { status: "error", code: "INVALID_INPUT", message: "JSON лида слишком большой." },
         { status: 413 },
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   }
 
   const abortController = new AbortController();
-  const timeoutSignal = AbortSignal.timeout(110_000);
+  const timeoutSignal = AbortSignal.timeout(285_000);
   const signal = AbortSignal.any([request.signal, abortController.signal, timeoutSignal]);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

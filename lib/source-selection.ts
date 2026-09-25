@@ -3,9 +3,6 @@ import type { Lead } from "@/lib/schemas";
 
 export type SourceCandidate = { url: string; origin: "search" | "previous" | "both" };
 
-const MAX_PAGES_TO_FETCH = 10;
-const MAX_PAGES_PER_HOST = 2;
-
 function normalizeUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -66,14 +63,5 @@ export function selectSourceCandidates(response: Response, lead: Lead, previousU
     if (previous.has(url)) origin = found.has(url) ? "both" : "previous";
     return { url, origin };
   });
-  const hostCounts = new Map<string, number>();
-  const toFetch: string[] = [];
-  for (const { url } of candidates) {
-    const host = new URL(url).hostname;
-    const count = hostCounts.get(host) ?? 0;
-    if (toFetch.length >= MAX_PAGES_TO_FETCH || count >= MAX_PAGES_PER_HOST) continue;
-    toFetch.push(url);
-    hostCounts.set(host, count + 1);
-  }
-  return { candidates, toFetch };
+  return { candidates, toFetch: ordered };
 }

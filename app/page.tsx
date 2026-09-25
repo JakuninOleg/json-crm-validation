@@ -99,22 +99,29 @@ export default function Home() {
     const lead = validation.lead;
     let cacheStatus: CompletedCacheStatus = forceRefresh ? "bypassed" : "miss";
     let previousSources: string[] = [];
+    let refreshPrevious = forceRefresh;
 
     setAnalysis({ status: "checking_cache" });
     try {
       const cached = await findCachedReport(lead);
       if (version !== requestVersion.current) return;
       if (cached) {
-        if (!forceRefresh) {
+        const incompletePrevious = cached.source_candidates.some(
+          (candidate) => candidate.status === "not_read" || candidate.status === "read_not_analyzed",
+        );
+        if (!forceRefresh && !incompletePrevious) {
           setAnalysis({ status: "cached", leadId: lead.lead_id, result: cached });
           return;
         }
-        const previouslyRead = cached.source_candidates.filter((candidate) => candidate.status !== "not_read");
+        refreshPrevious = true;
+        cacheStatus = "bypassed";
+        const previouslyUsed = cached.source_candidates.filter((candidate) => candidate.status === "used");
+        const previouslyRead = cached.source_candidates.filter((candidate) => candidate.status !== "not_read" && candidate.status !== "used");
         const notRead = cached.source_candidates.filter((candidate) => candidate.status === "not_read");
         const knownUrls = cached.source_candidates.length
-          ? [...previouslyRead, ...notRead].map((candidate) => candidate.url)
+          ? [...previouslyUsed, ...previouslyRead, ...notRead].map((candidate) => candidate.url)
           : [...cached.sources, ...cached.unavailable_sources];
-        previousSources = [...new Set(knownUrls)].slice(0, 10);
+        previousSources = [...new Set(knownUrls)];
       }
     } catch {
       cacheStatus = "unavailable";
@@ -130,7 +137,7 @@ export default function Home() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(forceRefresh ? { lead, previous_sources: previousSources } : lead),
+        body: JSON.stringify(refreshPrevious ? { lead, previous_sources: previousSources } : lead),
         signal: controller.signal,
       });
       const data = await readAnalysis(response, (nextStage) => {
@@ -157,7 +164,7 @@ export default function Home() {
         message = "Не удалось подключиться к серверу проверки. Проверьте соединение или попробуйте позже.";
       }
       if (error instanceof AnalysisRequestError) message = error.message;
-      setAnalysis({ status: "error", stage, cacheStatus, message, wasRefresh: forceRefresh });
+      setAnalysis({ status: "error", stage, cacheStatus, message, wasRefresh: refreshPrevious });
     } finally {
       if (activeRequest.current === controller) activeRequest.current = null;
     }

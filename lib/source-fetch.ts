@@ -8,11 +8,28 @@ export type SourceResult =
   | { url: string; source: PublicSource; unavailable: false }
   | { url: string; unavailable: true; reason: string };
 
-const MAX_BYTES = 400_000;
+const MAX_BYTES = 8_000_000;
 const MAX_REDIRECTS = 3;
-const MAX_RENDERED_PAGES = 4;
+const MAX_SOURCE_TEXT = 250_000;
+const FETCH_CONCURRENCY = 8;
+const CHUNK_SIZE = 12_000;
+const CHUNK_OVERLAP = 600;
 
 export class SourceReadError extends Error {}
+
+export function sourceChunks(sources: PublicSource[]): PublicSource[] {
+  const chunks: PublicSource[] = [];
+  for (const source of sources) {
+    let start = 0;
+    while (start < source.text.length) {
+      const end = Math.min(start + CHUNK_SIZE, source.text.length);
+      chunks.push({ ...source, text: source.text.slice(start, end) });
+      if (end === source.text.length) break;
+      start = end - CHUNK_OVERLAP;
+    }
+  }
+  return chunks;
+}
 
 function publicIpv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -46,8 +63,7 @@ function pageText(html: string) {
     .replace(/<[^>]+>/g, " "))
     .replace(/[\t ]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
-    .trim()
-    .slice(0, 30_000);
+    .trim();
 }
 
 function isMissingPage(text: string) {
@@ -107,53 +123,82 @@ export async function requestPublicResource(address: string, signal: AbortSignal
   return { url: url.href, status: response.status, contentType: response.contentType ?? "", body: response.body };
 }
 
-async function readPage(address: string, signal: AbortSignal, reserveRender: () => boolean): Promise<{ url: string; text: string }> {
+export async function readPdf(body: Buffer) {
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: body });
+  try {
+    const result = await parser.getText();
+    return result.text.trim();
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function readPage(address: string, signal: AbortSignal): Promise<{ url: string; text: string }> {
   const response = await requestPublicResource(address, signal);
   if (response.status !== 200) throw new SourceReadError(`Сервер вернул HTTP ${response.status}.`);
-  if (!/text\/(?:html|plain)/i.test(response.contentType ?? "")) {
+  const isPdf = /application\/pdf/i.test(response.contentType) ||
+    (/application\/octet-stream/i.test(response.contentType) && new URL(response.url).pathname.toLowerCase().endsWith(".pdf"));
+  if (!isPdf && !/text\/(?:html|plain)/i.test(response.contentType)) {
     throw new SourceReadError("Сервер не вернул читаемую HTML или текстовую страницу.");
   }
-  const body = response.body.toString("utf8");
-  const text = /text\/html/i.test(response.contentType) ? pageText(body) : body.trim().slice(0, 30_000);
-  if (text.length < 100) {
-    if (!/text\/html/i.test(response.contentType)) throw new SourceReadError("В ответе слишком мало текста.");
-    if (!reserveRender()) throw new SourceReadError("Лимит браузерного чтения страниц достигнут.");
+  let text: string;
+  if (isPdf) {
     try {
-      const { renderPage } = await import("./source-render.ts");
-      const rendered = await renderPage(response, signal);
-      if (isMissingPage(rendered.text)) {
-        throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
-      }
-      return rendered;
-    } catch (error) {
-      if (signal.aborted) throw signal.reason;
-      const detail = error instanceof SourceReadError ? error.message : "браузер не смог получить содержимое";
-      throw new SourceReadError(`Страница требует JavaScript; ${detail}.`);
+      text = await readPdf(response.body);
+    } catch {
+      throw new SourceReadError("Не удалось извлечь текст из PDF.");
     }
+  } else {
+    const body = response.body.toString("utf8");
+    text = /text\/html/i.test(response.contentType) ? pageText(body) : body.trim();
   }
   if (isMissingPage(text)) {
     throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
+  }
+  if (text.length < 100 && /text\/html/i.test(response.contentType)) {
+    try {
+      const { renderPage } = await import("./source-render.ts");
+      const rendered = await renderPage(response, signal);
+      text = rendered.text;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      if (text.length < 12) {
+        const detail = error instanceof SourceReadError ? error.message : "браузер не смог получить содержимое";
+        throw new SourceReadError(`Страница требует JavaScript; ${detail}.`);
+      }
+    }
+  }
+  if (text.length < 12) throw new SourceReadError("В документе слишком мало доступного текста.");
+  if (isMissingPage(text)) {
+    throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
+  }
+  if (text.length > MAX_SOURCE_TEXT) {
+    throw new SourceReadError("Текст документа превышает лимит безопасной обработки.");
   }
   return { url: response.url, text };
 }
 
 export async function fetchPublicSources(urls: string[], signal: AbortSignal): Promise<SourceResult[]> {
   signal.throwIfAborted();
-  let renderedPages = 0;
-  return Promise.all(urls.slice(0, 10).map(async (url, index) => {
-    try {
-      const page = await readPage(url, signal, () => {
-        if (renderedPages >= MAX_RENDERED_PAGES) return false;
-        renderedPages += 1;
-        return true;
-      });
-      return { url, source: { id: `s${index + 1}`, url: page.url, text: page.text }, unavailable: false };
-    } catch (error) {
-      if (signal.aborted) throw signal.reason;
-      const reason = error instanceof SourceReadError
-        ? error.message
-        : "Сервер проверки не смог получить страницу. Возможны ограничения сети или сайта.";
-      return { url, unavailable: true, reason };
+  const results: SourceResult[] = new Array(urls.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(FETCH_CONCURRENCY, urls.length) }, async () => {
+    while (nextIndex < urls.length) {
+      const index = nextIndex++;
+      const url = urls[index];
+      try {
+        const page = await readPage(url, signal);
+        results[index] = { url, source: { id: `s${index + 1}`, url: page.url, text: page.text }, unavailable: false };
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        const reason = error instanceof SourceReadError
+          ? error.message
+          : "Сервер проверки не смог получить страницу. Возможны ограничения сети или сайта.";
+        results[index] = { url, unavailable: true, reason };
+      }
     }
-  }));
+  });
+  await Promise.all(workers);
+  return results;
 }
