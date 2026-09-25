@@ -10,8 +10,9 @@ export type SourceResult =
 
 const MAX_BYTES = 400_000;
 const MAX_REDIRECTS = 3;
+const MAX_RENDERED_PAGES = 4;
 
-class SourceReadError extends Error {}
+export class SourceReadError extends Error {}
 
 function publicIpv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -49,7 +50,11 @@ function pageText(html: string) {
     .slice(0, 30_000);
 }
 
-async function readPage(address: string, signal: AbortSignal, redirects = 0): Promise<{ url: string; text: string }> {
+function isMissingPage(text: string) {
+  return /(?:404\s*[-:]?\s*page not found|page not found|this page (?:does not exist|is not available))/i.test(text.slice(0, 500));
+}
+
+export async function requestPublicResource(address: string, signal: AbortSignal, redirects = 0, maxBytes = MAX_BYTES): Promise<{ url: string; status: number; contentType: string; body: Buffer }> {
   const url = new URL(address);
   if (!(["http:", "https:"].includes(url.protocol)) || url.username || url.password || url.port ||
       !url.hostname.includes(".") || isIP(url.hostname) || url.hostname.endsWith(".local")) {
@@ -67,10 +72,10 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
   }
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
 
-  const response = await new Promise<{ status: number; location?: string; contentType?: string; body: string }>((resolve, reject) => {
+  const response = await new Promise<{ status: number; location?: string; contentType?: string; body: Buffer }>((resolve, reject) => {
     const req = request(url, {
       method: "GET", signal, timeout: 7_000,
-      headers: { "User-Agent": "WorrkiLeadCheck/1.0", "Accept": "text/html,text/plain", "Accept-Encoding": "identity" },
+      headers: { "User-Agent": "WorrkiLeadCheck/1.0", "Accept": "*/*", "Accept-Encoding": "identity" },
       lookup: (_host, options, callback) => {
         const address = addresses[0].address;
         if (options.all) callback(null, [{ address, family: 4 }]);
@@ -81,14 +86,14 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
       let size = 0;
       res.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_BYTES) { req.destroy(new SourceReadError("Страница превышает лимит размера для чтения.")); return; }
+        if (size > maxBytes) { req.destroy(new SourceReadError("Страница превышает лимит размера для чтения.")); return; }
         chunks.push(chunk);
       });
       res.on("end", () => resolve({
         status: res.statusCode ?? 0,
         location: res.headers.location,
         contentType: res.headers["content-type"],
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: Buffer.concat(chunks),
       }));
     });
     req.on("timeout", () => req.destroy(new SourceReadError("Превышено время ответа сайта.")));
@@ -97,27 +102,51 @@ async function readPage(address: string, signal: AbortSignal, redirects = 0): Pr
   });
 
   if ([301, 302, 303, 307, 308].includes(response.status) && response.location && redirects < MAX_REDIRECTS) {
-    return readPage(new URL(response.location, url).href, signal, redirects + 1);
+    return requestPublicResource(new URL(response.location, url).href, signal, redirects + 1, maxBytes);
   }
+  return { url: url.href, status: response.status, contentType: response.contentType ?? "", body: response.body };
+}
+
+async function readPage(address: string, signal: AbortSignal, reserveRender: () => boolean): Promise<{ url: string; text: string }> {
+  const response = await requestPublicResource(address, signal);
   if (response.status !== 200) throw new SourceReadError(`Сервер вернул HTTP ${response.status}.`);
   if (!/text\/(?:html|plain)/i.test(response.contentType ?? "")) {
     throw new SourceReadError("Сервер не вернул читаемую HTML или текстовую страницу.");
   }
-  const text = /text\/html/i.test(response.contentType ?? "") ? pageText(response.body) : response.body.trim().slice(0, 30_000);
+  const body = response.body.toString("utf8");
+  const text = /text\/html/i.test(response.contentType) ? pageText(body) : body.trim().slice(0, 30_000);
   if (text.length < 100) {
-    throw new SourceReadError("В ответе слишком мало текста. Возможно, браузер загружает содержимое через JavaScript.");
+    if (!/text\/html/i.test(response.contentType)) throw new SourceReadError("В ответе слишком мало текста.");
+    if (!reserveRender()) throw new SourceReadError("Лимит браузерного чтения страниц достигнут.");
+    try {
+      const { renderPage } = await import("./source-render.ts");
+      const rendered = await renderPage(response, signal);
+      if (isMissingPage(rendered.text)) {
+        throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
+      }
+      return rendered;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      const detail = error instanceof SourceReadError ? error.message : "браузер не смог получить содержимое";
+      throw new SourceReadError(`Страница требует JavaScript; ${detail}.`);
+    }
   }
-  if (/(?:404\s*[-:]?\s*page not found|page not found|this page (?:does not exist|is not available))/i.test(text.slice(0, 500))) {
+  if (isMissingPage(text)) {
     throw new SourceReadError("Сервер показал страницу с сообщением об отсутствии материала.");
   }
-  return { url: url.href, text };
+  return { url: response.url, text };
 }
 
 export async function fetchPublicSources(urls: string[], signal: AbortSignal): Promise<SourceResult[]> {
   signal.throwIfAborted();
+  let renderedPages = 0;
   return Promise.all(urls.slice(0, 10).map(async (url, index) => {
     try {
-      const page = await readPage(url, signal);
+      const page = await readPage(url, signal, () => {
+        if (renderedPages >= MAX_RENDERED_PAGES) return false;
+        renderedPages += 1;
+        return true;
+      });
       return { url, source: { id: `s${index + 1}`, url: page.url, text: page.text }, unavailable: false };
     } catch (error) {
       if (signal.aborted) throw signal.reason;
